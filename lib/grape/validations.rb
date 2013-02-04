@@ -127,8 +127,16 @@ module Grape
           doc_attrs[:type] = coerce_type.to_s
         end
 
+        if regexp = validations[:regexp]
+          doc_attrs[:regexp] = regexp.inspect
+        end
+
         if desc = validations.delete(:desc)
-          doc_attrs[:desc] = desc
+          doc_attrs[:desc] = desc.to_s
+        end
+
+        if example = validations.delete(:example)
+          doc_attrs[:example] = example.to_s
         end
 
         full_attrs = attrs.collect{ |name| { :name => name, :full_name => full_name(name)} }
