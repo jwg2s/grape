@@ -112,6 +112,22 @@ module Grape
         @last_description = options.merge(:description => description)
       end
 
+      # Add tier to the next namespace or function.
+      def tier(tier, options = {})
+        tier = :any if tier == '*'
+        tier = tier.to_s.capitalize
+        tier = ['Basic','Enhanced','Premium','Any','None'].include?(tier) ? tier : 'None'
+        @last_tier = options.merge(:tier => tier)
+      end
+
+      # Add level to the next namespace or function.
+      def level(level, options = {})
+        level = :any if level == '*'
+        level = level.to_s.capitalize
+        level = ['Account','Contact','Advisor','Advisory Firm','Segment','Bundle','Any','None'].include?(level) ? level : 'None'
+        @last_level = options.merge(:level => level)
+      end
+
       # Specify the default format for the API's serializers.
       # May be `:json` or `:txt` (default).
       def default_format(new_format = nil)
@@ -316,11 +332,13 @@ module Grape
         endpoint_options = {
           :method => methods,
           :path => paths,
-          :route_options => (@namespace_description || {}).deep_merge(@last_description || {}).deep_merge(route_options || {})
+          :route_options => (@namespace_description || {}).deep_merge(@last_description || {}).deep_merge(@namespace_tier || {}).deep_merge(@last_tier || {}).deep_merge(@namespace_level || {}).deep_merge(@last_level || {}).deep_merge(route_options || {})
         }
         endpoints << Grape::Endpoint.new(settings.clone, endpoint_options, &block)
 
         @last_description = nil
+        @last_tier = nil
+        @last_level = nil
         reset_validations!
       end
 
@@ -349,10 +367,18 @@ module Grape
           previous_namespace_description = @namespace_description
           @namespace_description = (@namespace_description || {}).deep_merge(@last_description || {})
           @last_description = nil
+          previous_namespace_tier = @namespace_tier
+          @namespace_tier = (@namespace_tier || {}).deep_merge(@last_tier || {})
+          @last_tier = nil
+          previous_namespace_level = @namespace_level
+          @namespace_level = (@namespace_level || {}).deep_merge(@last_level || {})
+          @last_level = nil
           nest(block) do
             set(:namespace, space.to_s) if space
           end
           @namespace_description = previous_namespace_description
+          @namespace_tier = previous_namespace_tier
+          @namespace_level = previous_namespace_level
         else
           Rack::Mount::Utils.normalize_path(settings.stack.map{|s| s[:namespace]}.join('/'))
         end
