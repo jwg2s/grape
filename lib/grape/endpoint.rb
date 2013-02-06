@@ -158,6 +158,16 @@ module Grape
         deep_merge(env['rack.routing_args'] || {})
     end
 
+    # The minimum API tier
+    def tier
+      env["api.endpoint"].options.fetch(:route_options,{}).fetch(:tier,:any)
+    end
+
+    # The minimum API level
+    def level
+      env["api.endpoint"].options.fetch(:route_options,{}).fetch(:level,:any)
+    end
+
     # A filtering method that will return a hash
     # consisting only of keys that have been declared by a
     # `params` statement.
