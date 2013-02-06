@@ -115,16 +115,16 @@ module Grape
       # Add tier to the next namespace or function.
       def tier(tier, options = {})
         tier = :any if tier == '*'
-        tier = tier.to_s.capitalize
-        tier = ['Basic','Enhanced','Premium','Any','None'].include?(tier) ? tier : 'None'
+        tier = tier.to_sym.downcase
+        tier = [:basic,:enhanced,:premium,:any,:none].include?(tier) ? tier : :none
         @last_tier = options.merge(:tier => tier)
       end
 
       # Add level to the next namespace or function.
       def level(level, options = {})
         level = :any if level == '*'
-        level = level.to_s.capitalize
-        level = ['Account','Contact','Advisor','Advisory Firm','Segment','Bundle','Any','None'].include?(level) ? level : 'None'
+        level = level.to_sym.downcase
+        level = [:account,:contact,:advisor,:advisory_firm,:segment,:bundle,:any,:none].include?(level) ? level : :none
         @last_level = options.merge(:level => level)
       end
 
