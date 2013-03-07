@@ -111,6 +111,15 @@ module Grape
       def desc(description, options = {})
         @last_description = options.merge(:description => description)
       end
+      alias_method :description, :desc
+
+      def detail(detail, options = {})
+        @last_detail = options.merge(:detail => detail)
+      end
+
+      def glossary(glossary, options = {})
+        @last_glossary = options.merge(:glossary => glossary)
+      end
 
       # Add tier to the next namespace or function.
       def tier(tier, options = {})
@@ -346,11 +355,13 @@ module Grape
         endpoint_options = {
           :method => methods,
           :path => paths,
-          :route_options => (@namespace_description || {}).deep_merge(@last_description || {}).deep_merge(@namespace_tier || {}).deep_merge(@last_tier || {}).deep_merge(@namespace_level || {}).deep_merge(@last_level || {}).deep_merge(route_options || {}).deep_merge(@namespace_varies || {}).deep_merge(@last_varies || {})
+          :route_options => (@namespace_description || {}).deep_merge(@last_description || {}).deep_merge(@namespace_detail || {}).deep_merge(@last_detail || {}).deep_merge(@namespace_glossary || {}).deep_merge(@last_glossary || {}).deep_merge(@namespace_tier || {}).deep_merge(@last_tier || {}).deep_merge(@namespace_level || {}).deep_merge(@last_level || {}).deep_merge(route_options || {}).deep_merge(@namespace_varies || {}).deep_merge(@last_varies || {})
         }
         endpoints << Grape::Endpoint.new(settings.clone, endpoint_options, &block)
 
         @last_description = nil
+        @last_detail = nil
+        @last_glossary = nil
         @last_tier = nil
         @last_level = nil
         @last_varies = nil
@@ -382,6 +393,12 @@ module Grape
           previous_namespace_description = @namespace_description
           @namespace_description = (@namespace_description || {}).deep_merge(@last_description || {})
           @last_description = nil
+          previous_namespace_detail = @namespace_detail
+          @namespace_detail = (@namespace_detail || {}).deep_merge(@last_detail || {})
+          @last_detail = nil
+          previous_namespace_glossary = @namespace_glossary
+          @namespace_glossary = (@namespace_glossary || {}).deep_merge(@last_glossary || {})
+          @last_glossary = nil
           previous_namespace_tier = @namespace_tier
           @namespace_tier = (@namespace_tier || {}).deep_merge(@last_tier || {})
           @last_tier = nil
@@ -395,6 +412,8 @@ module Grape
             set(:namespace, space.to_s) if space
           end
           @namespace_description = previous_namespace_description
+          @namespace_detail = previous_namespace_detail
+          @namespace_glossary = previous_namespace_glossary
           @namespace_tier = previous_namespace_tier
           @namespace_level = previous_namespace_level
           @namespace_varies = previous_namespace_varies
