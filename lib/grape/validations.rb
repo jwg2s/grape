@@ -132,7 +132,11 @@ module Grape
         end
 
         if desc = validations.delete(:desc)
-          doc_attrs[:desc] = desc.to_s
+          doc_attrs[:description] = desc.to_s
+        end
+
+        if description = validations.delete(:description)
+          doc_attrs[:description] = description.to_s
         end
 
         if example = validations.delete(:example)
