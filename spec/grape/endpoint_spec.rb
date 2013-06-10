@@ -47,6 +47,31 @@ describe Grape::Endpoint do
     end
   end
 
+  describe '#headers' do
+    before do
+      subject.get('/headers') do
+        headers.to_json
+      end
+    end
+    it 'includes request headers' do
+      get '/headers'
+      JSON.parse(last_response.body).should == {
+        "Host" => "example.org",
+        "Cookie" => ""
+      }
+    end
+    it 'includes additional request headers' do
+      get '/headers', nil, { "HTTP_X_GRAPE_CLIENT" => "1" }
+      JSON.parse(last_response.body)["X-Grape-Client"].should == "1"
+    end
+    it 'includes headers passed as symbols' do
+      env = Rack::MockRequest.env_for("/headers")
+      env[:HTTP_SYMBOL_HEADER] = "Goliath passes symbols"
+      body = subject.call(env)[2].body.first
+      JSON.parse(body)["Symbol-Header"].should == "Goliath passes symbols"
+    end
+  end
+
   describe '#cookies' do
     it 'is callable from within a block' do
       subject.get('/get/cookies') do
@@ -148,18 +173,40 @@ describe Grape::Endpoint do
       subject.params do
         requires :first
         optional :second
+        optional :third, :default => 'third-default'
+        group :nested do
+          optional :fourth
+        end
       end
-
-
     end
 
     it 'has as many keys as there are declared params' do
       subject.get '/declared' do
-        declared(params).keys.size.should == 2
+        declared(params).keys.size.should == 4
         ""
       end
 
       get '/declared?first=present'
+      last_response.status.should == 200
+    end
+
+    it 'has a optional param with default value all the time' do
+      subject.get '/declared' do
+        params[:third].should == 'third-default'
+        ""
+      end
+
+      get '/declared?first=one'
+      last_response.status.should == 200
+    end
+
+    it 'builds nested params' do
+      subject.get '/declared' do
+        declared(params)[:nested].keys.size.should == 1
+        ""
+      end
+
+      get '/declared?first=present&nested[fourth]=1'
       last_response.status.should == 200
     end
 
@@ -227,32 +274,62 @@ describe Grape::Endpoint do
         params[:person_email]
         end
 
-        get '/rodzyn@grape.com'
-        last_response.body.should == 'rodzyn@grape.com'
+        get '/someone@example.com'
+        last_response.body.should == 'someone@example.com'
 
-        get 'rodzyn@grape.com.pl'
-        last_response.body.should == 'rodzyn@grape.com.pl'
+        get 'someone@example.com.pl'
+        last_response.body.should == 'someone@example.com.pl'
       end
 
       it 'parses many params with provided regexps' do
         subject.get('/:person_email/test/:number',
           :requirements => {
-            :person_email => /rodzyn@(.*).com/,
+            :person_email => /someone@(.*).com/,
             :number => /[0-9]/ }) do
         params[:person_email] << params[:number]
         end
 
-        get '/rodzyn@grape.com/test/1'
-        last_response.body.should == 'rodzyn@grape.com1'
+        get '/someone@example.com/test/1'
+        last_response.body.should == 'someone@example.com1'
 
-        get '/rodzyn@testing.wrong/test/1'
+        get '/someone@testing.wrong/test/1'
         last_response.status.should == 404
 
-        get 'rodzyn@test.com/test/wrong_number'
+        get 'someone@test.com/test/wrong_number'
         last_response.status.should == 404
 
-        get 'rodzyn@test.com/wrong_middle/1'
+        get 'someone@test.com/wrong_middle/1'
         last_response.status.should == 404
+      end
+
+      context 'namespace requirements' do
+        before :each do
+          subject.namespace :outer, :requirements => { :person_email => /abc@(.*).com/ } do
+            get('/:person_email') do
+              params[:person_email]
+            end
+
+            namespace :inner, :requirements => {:number => /[0-9]/, :person_email => /someone@(.*).com/ }do
+              get '/:person_email/test/:number' do
+                params[:person_email] << params[:number]
+              end
+            end
+          end
+        end
+        it "parse email param with provided requirements for params" do
+          get '/outer/abc@example.com'
+          last_response.body.should == 'abc@example.com'
+        end
+
+        it "should override outer namespace's requirements" do
+          get '/outer/inner/someone@testing.wrong/test/1'
+          last_response.status.should == 404
+
+          get '/outer/inner/someone@testing.com/test/1'
+          last_response.status.should == 200
+          last_response.body.should == 'someone@testing.com1'
+        end
+
       end
     end
 
@@ -303,7 +380,7 @@ describe Grape::Endpoint do
       end
       put '/request_body', '<user>Bobby T.</user>', {'CONTENT_TYPE' => 'application/xml'}
       last_response.status.should == 406
-      last_response.body.should == '{"error":"The requested content-type is not supported."}'
+      last_response.body.should == '{"error":"The requested content-type \'application/xml\' is not supported."}'
     end
 
   end
@@ -494,13 +571,15 @@ describe Grape::Endpoint do
       get '/url'
       last_response.body.should == "http://example.org/url"
     end
-    it 'should include version' do
-      subject.version 'v1', :using => :path
-      subject.get('/url') do
-        request.url
+    [ 'v1', :v1 ].each do |version|
+      it 'should include version #{version}' do
+        subject.version version, :using => :path
+        subject.get('/url') do
+          request.url
+        end
+        get "/#{version}/url"
+        last_response.body.should == "http://example.org/#{version}/url"
       end
-      get '/v1/url'
-      last_response.body.should == "http://example.org/v1/url"
     end
     it 'should include prefix' do
       subject.version 'v1', :using => :path

@@ -19,11 +19,28 @@ module Grape
       end
 
       def validate!(params)
-        params = @scope.params(params)
+        attributes = AttributesIterator.new(self, @scope, params)
+        attributes.each do |resource_params, attr_name|
+          if @required || resource_params.has_key?(attr_name)
+            validate_param!(attr_name, resource_params)
+          end
+        end
+      end
 
-        @attrs.each do |attr_name|
-          if @required || params.has_key?(attr_name)
-            validate_param!(attr_name, params)
+      class AttributesIterator
+        include Enumerable
+
+        def initialize(validator, scope, params)
+          @attrs = validator.attrs
+          @params = scope.params(params)
+          @params = (@params.is_a?(Array) ? @params : [@params])
+        end
+
+        def each
+          @params.each do |resource_params|
+            @attrs.each do |attr_name|
+              yield resource_params, attr_name
+            end
           end
         end
       end
@@ -74,9 +91,13 @@ module Grape
 
       def initialize(api, element, parent, &block)
         @element = element
-        @parent = parent
-        @api = api
+        @parent  = parent
+        @api     = api
+        @declared_params = []
+
         instance_eval(&block)
+
+        configure_declared_params
       end
 
       def requires(*attrs)
@@ -114,7 +135,24 @@ module Grape
         name.to_s
       end
 
+    protected
+
+      def push_declared_params(attrs)
+        @declared_params.concat attrs
+      end
+
     private
+
+      # Pushes declared params to parent or settings
+      def configure_declared_params
+        if @parent
+          @parent.push_declared_params [element => @declared_params]
+        else
+          @api.settings.peek[:declared_params] ||= []
+          @api.settings[:declared_params].concat @declared_params
+        end
+      end
+
       def validates(attrs, validations)
         doc_attrs = { :required => validations.keys.include?(:presence) }
 
@@ -141,6 +179,10 @@ module Grape
 
         if example = validations.delete(:example)
           doc_attrs[:example] = example.to_s
+        end
+
+        if default = validations[:default]
+          doc_attrs[:default] = default
         end
 
         full_attrs = attrs.collect{ |name| { :name => name, :full_name => full_name(name)} }
@@ -174,10 +216,6 @@ module Grape
         end
       end
 
-      def push_declared_params(attrs)
-        @api.settings.peek[:declared_params] ||= []
-        @api.settings[:declared_params] += attrs
-      end
     end
 
     # This module is mixed into the API Class.

@@ -35,7 +35,12 @@ module Grape
     def initialize(settings, options = {}, &block)
       @settings = settings
       if block_given?
-        method_name = "#{options[:method]} #{settings.gather(:namespace).join( "/")} #{Array(options[:path]).join("/")}"
+        method_name = [
+          options[:method],
+          Namespace.joined_space(settings),
+          settings.gather(:mount_path).join("/"),
+          Array(options[:path]).join("/")
+        ].join(" ")
         @source = block
         @block = self.class.generate_api_method(method_name, &block)
       end
@@ -57,13 +62,19 @@ module Grape
 
     def mount_in(route_set)
       if endpoints
-        endpoints.each{|e| e.mount_in(route_set)}
+        endpoints.each { |e| e.mount_in(route_set) }
       else
         routes.each do |route|
-          route_set.add_route(self, {
-            :path_info => route.route_compiled,
-            :request_method => route.route_method,
-          }, { :route_info => route })
+          methods = [ route.route_method ]
+          if ! settings[:do_not_route_head] && route.route_method == "GET"
+            methods << "HEAD"
+          end
+          methods.each do |method|
+            route_set.add_route(self, {
+              :path_info => route.route_compiled,
+              :request_method => method,
+            }, { :route_info => route })
+          end
         end
       end
     end
@@ -77,7 +88,11 @@ module Grape
           anchor = options[:route_options][:anchor]
           anchor = anchor.nil? ? true : anchor
 
-          requirements = options[:route_options][:requirements] || {}
+          endpoint_requirements = options[:route_options][:requirements] || {}
+          all_requirements = (settings.gather(:namespace).map(&:requirements) << endpoint_requirements)
+          requirements = all_requirements.reduce({}) do |base_requirements, single_requirements|
+            base_requirements.merge!(single_requirements)
+          end
 
           path = compile_path(prepared_path, anchor && !options[:app], requirements)
           regex = Rack::Mount::RegexpWithNamedGroups.new(path)
@@ -106,6 +121,7 @@ module Grape
 
     def prepare_path(path)
       parts = []
+      parts << settings[:mount_path].to_s.split("/") if settings[:mount_path]
       parts << settings[:root_prefix].to_s.split("/") if settings[:root_prefix]
 
       uses_path_versioning = settings[:version] && settings[:version_options][:using] == :path
@@ -113,7 +129,7 @@ module Grape
       path_is_empty = path && (path.to_s =~ /^\s*$/ || path.to_s == '/')
 
       parts << ':version' if uses_path_versioning
-      if !uses_path_versioning || (!namespace_is_empty || !path_is_empty)
+      if ! uses_path_versioning || (! namespace_is_empty || ! path_is_empty)
         parts << namespace.to_s if namespace
         parts << path.to_s if path
         format_suffix = '(.:format)'
@@ -125,7 +141,7 @@ module Grape
     end
 
     def namespace
-      Rack::Mount::Utils.normalize_path(settings.stack.map{|s| s[:namespace]}.join('/'))
+      @namespace ||= Namespace.joined_space_path(settings)
     end
 
     def compile_path(prepared_path, anchor = true, requirements = {})
@@ -153,9 +169,7 @@ module Grape
     # The parameters passed into the request as
     # well as parsed from URL segments.
     def params
-      @params ||= Hashie::Mash.new.
-        deep_merge(request.params).
-        deep_merge(env['rack.routing_args'] || {})
+      @params ||= @request.params
     end
 
     # The minimum API tier
@@ -174,20 +188,29 @@ module Grape
     #
     # @param params [Hash] The initial hash to filter. Usually this will just be `params`
     # @param options [Hash] Can pass `:include_missing` and `:stringify` options.
-    def declared(params, options = {})
+    def declared(params, options = {}, declared_params = settings[:declared_params])
       options[:include_missing] = true unless options.key?(:include_missing)
 
-      unless settings[:declared_params]
+      unless declared_params
         raise ArgumentError, "Tried to filter for declared parameters but none exist."
       end
 
-      settings[:declared_params].inject({}){|h,k|
-        output_key = options[:stringify] ? k.to_s : k.to_sym
-        if params.key?(output_key) || options[:include_missing]
-          h[output_key] = params[k]
+      declared_params.inject({}) do |hash, key|
+        key = { key => nil } unless key.is_a? Hash
+
+        key.each_pair do |parent, children|
+          output_key = options[:stringify] ? parent.to_s : parent.to_sym
+          if params.key?(parent) || options[:include_missing]
+            hash[output_key] = if children
+              declared(params[parent] || {}, options, Array(children))
+            else
+              params[parent]
+            end
+          end
         end
-        h
-      }
+
+        hash
+      end
     end
 
     # The API version as specified in the URL.
@@ -249,6 +272,11 @@ module Grape
       end
     end
 
+    # Retrieves all available request headers.
+    def headers
+      @headers ||= @request.headers
+    end
+
     # Set response content-type
     def content_type(val)
       header('Content-Type', val)
@@ -299,11 +327,17 @@ module Grape
     #       :with => API::Entities::User,
     #       :admin => current_user.admin?
     #   end
-    def present(object, options = {})
+    def present(*args)
+      options = args.count > 1 ? args.extract_options! : {}
+      key, object = if args.count == 2 && args.first.is_a?(Symbol)
+                      args
+                    else
+                      [nil, args.first]
+                    end
       entity_class = options.delete(:with)
 
       # auto-detect the entity from the first object in the collection
-      object_instance = object.is_a?(Array) ? object.first : object
+      object_instance = object.respond_to?(:first) ? object.first : object
 
       object_instance.class.ancestors.each do |potential|
         entity_class ||= (settings[:representations] || {})[potential]
@@ -322,6 +356,7 @@ module Grape
       end
 
       representation = { root => representation } if root
+      representation = (@body || {}).merge({key => representation}) if key
       body representation
     end
 
@@ -352,7 +387,7 @@ module Grape
     def run(env)
       @env = env
       @header = {}
-      @request = Rack::Request.new(@env)
+      @request = Grape::Request.new(@env)
 
       self.extend helpers
       cookies.read(@request)
@@ -366,7 +401,7 @@ module Grape
 
       run_filters after_validations
 
-      response_text = @block.call(self)
+      response_text = @block ? @block.call(self) : nil
       run_filters afters
       cookies.write(header)
 
@@ -378,6 +413,7 @@ module Grape
 
       b.use Rack::Head
       b.use Grape::Middleware::Error,
+        :format => settings[:format],
         :default_status => settings[:default_error_status] || 403,
         :rescue_all => settings[:rescue_all],
         :rescued_errors => aggregate_setting(:rescued_errors),
@@ -385,6 +421,16 @@ module Grape
         :error_formatters => settings[:error_formatters],
         :rescue_options => settings[:rescue_options],
         :rescue_handlers => merged_setting(:rescue_handlers)
+
+      aggregate_setting(:middleware).each do |m|
+        m = m.dup
+        block = m.pop if m.last.is_a?(Proc)
+        if block
+          b.use *m, &block
+        else
+          b.use *m
+        end
+      end
 
       b.use Rack::Auth::Basic, settings[:auth][:realm], &settings[:auth][:proc] if settings[:auth] && settings[:auth][:type] == :http_basic
       b.use Rack::Auth::Digest::MD5, settings[:auth][:realm], settings[:auth][:opaque], &settings[:auth][:proc] if settings[:auth] && settings[:auth][:type] == :http_digest
@@ -403,16 +449,6 @@ module Grape
         :content_types => settings[:content_types],
         :formatters => settings[:formatters],
         :parsers => settings[:parsers]
-
-      aggregate_setting(:middleware).each do |m|
-        m = m.dup
-        block = m.pop if m.last.is_a?(Proc)
-        if block
-          b.use *m, &block
-        else
-          b.use *m
-        end
-      end
 
       b
     end

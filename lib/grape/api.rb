@@ -66,10 +66,19 @@ module Grape
         settings.imbue(key, value)
       end
 
-      # Define a root URL prefix for your entire
-      # API.
+      # Define a root URL prefix for your entire API.
       def prefix(prefix = nil)
         prefix ? set(:root_prefix, prefix) : settings[:root_prefix]
+      end
+
+      # Do not route HEAD requests to GET requests automatically
+      def do_not_route_head!
+        set(:do_not_route_head, true)
+      end
+
+      # Do not automatically route OPTIONS
+      def do_not_route_options!
+        set(:do_not_route_options, true)
       end
 
       # Specify an API version.
@@ -326,16 +335,19 @@ module Grape
       end
 
       def mount(mounts)
-        mounts = {mounts => '/'} unless mounts.respond_to?(:each_pair)
+        mounts = { mounts => '/' } unless mounts.respond_to?(:each_pair)
         mounts.each_pair do |app, path|
-          if app.respond_to?(:inherit_settings)
-            app.inherit_settings(settings.clone)
+          if app.respond_to?(:inherit_settings, true)
+            app_settings = settings.clone
+            mount_path = Rack::Mount::Utils.normalize_path([ settings[:mount_path], path ].compact.join("/"))
+            app_settings.set :mount_path, mount_path
+            app.inherit_settings(app_settings)
           end
-          endpoints << Grape::Endpoint.new(settings.clone,
+          endpoints << Grape::Endpoint.new(settings.clone, {
             :method => :any,
             :path => path,
             :app => app
-          )
+          })
         end
       end
 
@@ -388,7 +400,7 @@ module Grape
       def options(paths = ['/'], options = {}, &block); route('OPTIONS', paths, options, &block) end
       def patch(paths = ['/'], options = {}, &block); route('PATCH', paths, options, &block) end
 
-      def namespace(space = nil, &block)
+      def namespace(space = nil, options = {},  &block)
         if space || block_given?
           previous_namespace_description = @namespace_description
           @namespace_description = (@namespace_description || {}).deep_merge(@last_description || {})
@@ -409,7 +421,7 @@ module Grape
           @namespace_varies = (@namespace_varies || {}).deep_merge(@last_varies || {})
           @last_varies = nil
           nest(block) do
-            set(:namespace, space.to_s) if space
+            set(:namespace, Namespace.new(space, options)) if space
           end
           @namespace_description = previous_namespace_description
           @namespace_detail = previous_namespace_detail
@@ -418,8 +430,19 @@ module Grape
           @namespace_level = previous_namespace_level
           @namespace_varies = previous_namespace_varies
         else
-          Rack::Mount::Utils.normalize_path(settings.stack.map{|s| s[:namespace]}.join('/'))
+          Namespace.joined_space_path(settings)
         end
+      end
+
+      # Thie method allows you to quickly define a parameter route segment
+      # in your API.
+      #
+      # @param param [Symbol] The name of the parameter you wish to declare.
+      # @option options [Regexp] You may supply a regular expression that the declared parameter must meet.
+      def route_param(param, options = {}, &block)
+        options = options.dup
+        options[:requirements] = { param.to_sym => options[:requirements] } if options[:requirements].is_a?(Regexp)
+        namespace(":#{param}", options, &block)
       end
 
       alias_method :group, :namespace
@@ -462,6 +485,12 @@ module Grape
         @versions ||= []
       end
 
+      def cascade(value = nil)
+        value.nil? ? 
+          (settings.has_key?(:cascade) ? !! settings[:cascade] : true) :
+          set(:cascade, value)
+      end
+
       protected
 
       def prepare_routes
@@ -488,14 +517,17 @@ module Grape
         end
       end
 
-     def inherited(subclass)
+      def inherited(subclass)
         subclass.reset!
         subclass.logger = logger.clone
       end
 
       def inherit_settings(other_stack)
         settings.prepend other_stack
-        endpoints.each{|e| e.settings.prepend(other_stack)}
+        endpoints.each do |e|
+          e.settings.prepend(other_stack)
+          e.options[:app].inherit_settings(other_stack) if e.options[:app].respond_to?(:inherit_settings, true)
+        end
       end
     end
 
@@ -509,7 +541,23 @@ module Grape
     end
 
     def call(env)
-      @route_set.call(env)
+      status, headers, body = @route_set.call(env)
+      headers.delete('X-Cascade') unless cascade?
+      [ status, headers, body ]
+    end
+
+    # Some requests may return a HTTP 404 error if grape cannot find a matching
+    # route. In this case, Rack::Mount adds a X-Cascade header to the response
+    # and sets it to 'pass', indicating to grape's parents they should keep
+    # looking for a matching route on other resources.
+    #
+    # In some applications (e.g. mounting grape on rails), one might need to trap
+    # errors from reaching upstream. This is effectivelly done by unsetting
+    # X-Cascade. Default :cascade is true.
+    def cascade?
+      return !! self.class.settings[:cascade] if self.class.settings.has_key?(:cascade)
+      return !! self.class.settings[:version_options][:cascade] if self.class.settings[:version_options] && self.class.settings[:version_options].has_key?(:cascade)
+      true
     end
 
     reset!
@@ -530,18 +578,21 @@ module Grape
       resources.flatten.each do |route|
         allowed_methods[route.route_compiled] << route.route_method
       end
-
       allowed_methods.each do |path_info, methods|
+        if methods.include?('GET') && ! methods.include?("HEAD") && ! self.class.settings[:do_not_route_head]
+          methods = methods | [ 'HEAD' ]
+        end
         allow_header = (["OPTIONS"] | methods).join(", ")
-        unless methods.include?("OPTIONS")
+        unless methods.include?("OPTIONS") || self.class.settings[:do_not_route_options]
           @route_set.add_route( proc { [204, { 'Allow' => allow_header }, []]}, {
             :path_info      => path_info,
             :request_method => "OPTIONS"
           })
         end
         not_allowed_methods = %w(GET PUT POST DELETE PATCH HEAD) - methods
+        not_allowed_methods << "OPTIONS" if self.class.settings[:do_not_route_options]
         not_allowed_methods.each do |bad_method|
-          @route_set.add_route( proc { [405, { 'Allow' => allow_header }, []]}, {
+          @route_set.add_route( proc { [405, { 'Allow' => allow_header, 'Content-Type' => 'text/plain' }, []]}, {
             :path_info      => path_info,
             :request_method => bad_method
           })
