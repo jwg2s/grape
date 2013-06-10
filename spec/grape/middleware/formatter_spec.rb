@@ -36,8 +36,31 @@ describe Grape::Middleware::Formatter do
     end
   end
 
+  context 'error handling' do
+    let(:formatter) { stub(:formatter) }
+    before do
+      Grape::Formatter::Base.stub(:formatter_for) { formatter }
+    end
+
+    it 'rescues formatter-specific exceptions' do
+      formatter.stub(:call) { raise Grape::Exceptions::InvalidFormatter.new(String, 'xml') }
+
+      expect {
+        catch(:error){subject.call({'PATH_INFO' => '/somewhere.xml', 'HTTP_ACCEPT' => 'application/json'})}
+      }.to_not raise_error
+    end
+
+    it 'does not rescue other exceptions' do
+      formatter.stub(:call) { raise StandardError }
+
+      expect {
+        catch(:error){subject.call({'PATH_INFO' => '/somewhere.xml', 'HTTP_ACCEPT' => 'application/json'})}
+      }.to raise_error
+    end
+  end
+
   context 'detection' do
-    
+
     it 'uses the extension if one is provided' do
       subject.call({'PATH_INFO' => '/info.xml'})
       subject.env['api.format'].should == :xml
@@ -149,43 +172,73 @@ describe Grape::Middleware::Formatter do
   end
 
   context 'input' do
-    [ "application/json", "application/json; charset=utf-8" ].each do |content_type|
-      it 'parses the body from a POST/PUT and put the contents into rack.request.form_hash for #{content_type}' do
+    [ "POST", "PATCH", "PUT" ].each do |method|
+      [ "application/json", "application/json; charset=utf-8" ].each do |content_type|
+        context content_type do
+          it 'parses the body from #{method} and copies values into rack.request.form_hash' do
+            io = StringIO.new('{"is_boolean":true,"string":"thing"}')
+            subject.call({
+              'PATH_INFO' => '/info',
+              'REQUEST_METHOD' => method,
+              'CONTENT_TYPE' => content_type,
+              'rack.input' => io,
+              'CONTENT_LENGTH' => io.length
+            })
+            subject.env['rack.request.form_hash']['is_boolean'].should be_true
+            subject.env['rack.request.form_hash']['string'].should == 'thing'
+          end
+        end
+      end
+      it "parses the chunked body from #{method} and copies values into rack.request.from_hash" do
         io = StringIO.new('{"is_boolean":true,"string":"thing"}')
         subject.call({
-          'PATH_INFO' => '/info',
-          'REQUEST_METHOD' => 'POST',
-          'CONTENT_TYPE' => content_type,
+          'PATH_INFO' => '/infol',
+          'REQUEST_METHOD' => method,
+          'CONTENT_TYPE' => 'application/json',
           'rack.input' => io,
-          'CONTENT_LENGTH' => io.length
+          'HTTP_TRANSFER_ENCODING' => 'chunked'
         })
         subject.env['rack.request.form_hash']['is_boolean'].should be_true
         subject.env['rack.request.form_hash']['string'].should == 'thing'
       end
-    end
-    it 'parses the body from an xml POST/PUT and put the contents into rack.request.from_hash' do
-      io = StringIO.new('<thing><name>Test</name></thing>')
-      subject.call({
-        'PATH_INFO' => '/info.xml',
-        'REQUEST_METHOD' => 'POST',
-        'CONTENT_TYPE' => 'application/xml',
-        'rack.input' => io,
-        'CONTENT_LENGTH' => io.length
-      })
-      subject.env['rack.request.form_hash']['thing']['name'].should == 'Test'
-    end
-    [ Rack::Request::FORM_DATA_MEDIA_TYPES, Rack::Request::PARSEABLE_DATA_MEDIA_TYPES ].flatten.each do |content_type|
-      it "ignores #{content_type}" do
-        io = StringIO.new('name=Other+Test+Thing')
+      it "rewinds IO" do
+        io = StringIO.new('{"is_boolean":true,"string":"thing"}')
+        io.read
         subject.call({
-          'PATH_INFO' => '/info',
-          'REQUEST_METHOD' => 'POST',
-          'CONTENT_TYPE' => content_type,
+          'PATH_INFO' => '/infol',
+          'REQUEST_METHOD' => method,
+          'CONTENT_TYPE' => 'application/json',
+          'rack.input' => io,
+          'HTTP_TRANSFER_ENCODING' => 'chunked'
+        })
+        subject.env['rack.request.form_hash']['is_boolean'].should be_true
+        subject.env['rack.request.form_hash']['string'].should == 'thing'
+      end
+      it 'parses the body from an xml #{method} and copies values into rack.request.from_hash' do
+        io = StringIO.new('<thing><name>Test</name></thing>')
+        subject.call({
+          'PATH_INFO' => '/info.xml',
+          'REQUEST_METHOD' => method,
+          'CONTENT_TYPE' => 'application/xml',
           'rack.input' => io,
           'CONTENT_LENGTH' => io.length
         })
-        subject.env['rack.request.form_hash'].should be_nil
+        subject.env['rack.request.form_hash']['thing']['name'].should == 'Test'
+      end
+      [ Rack::Request::FORM_DATA_MEDIA_TYPES, Rack::Request::PARSEABLE_DATA_MEDIA_TYPES ].flatten.each do |content_type|
+        it "ignores #{content_type}" do
+          io = StringIO.new('name=Other+Test+Thing')
+          subject.call({
+            'PATH_INFO' => '/info',
+            'REQUEST_METHOD' => method,
+            'CONTENT_TYPE' => content_type,
+            'rack.input' => io,
+            'CONTENT_LENGTH' => io.length
+          })
+          subject.env['rack.request.form_hash'].should be_nil
+        end
       end
     end
   end
+
 end

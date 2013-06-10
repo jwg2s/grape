@@ -23,12 +23,14 @@ module Grape
 
       def after
         status, headers, bodies = *@app_response
-        formatter = Grape::Formatter::Base.formatter_for env['api.format'], options
+        # allow content-type to be explicitly overwritten
+        api_format = mime_types[headers["Content-Type"]] || env['api.format']
+        formatter = Grape::Formatter::Base.formatter_for api_format, options
         begin
           bodymap = bodies.collect do |body|
             formatter.call body, env
           end
-        rescue Exception => e
+        rescue Grape::Exceptions::InvalidFormatter => e
           throw :error, :status => 500, :message => e.message
         end
         headers['Content-Type'] = content_type_for(env['api.format']) unless headers['Content-Type']
@@ -37,29 +39,48 @@ module Grape
 
       private
 
+        # store read input in env['api.request.input']
         def read_body_input
-          if (request.post? || request.put?) && (! request.form_data?) && (! request.parseable_data?) && (request.content_length.to_i > 0)
-            if env['rack.input'] && (body = env['rack.input'].read).length > 0
+          if (request.post? || request.put? || request.patch?) &&
+            (! request.form_data? || ! request.media_type) &&
+            (! request.parseable_data?) &&
+            (request.content_length.to_i > 0 || request.env['HTTP_TRANSFER_ENCODING'] == 'chunked')
+
+            if (input = env['rack.input'])
+              input.rewind
+              body = env['api.request.input'] = input.read
               begin
-                fmt = mime_types[request.media_type] if request.media_type
-                if content_type_for(fmt)
-                  parser = Grape::Parser::Base.parser_for fmt, options
-                  unless parser.nil?
-                    begin
-                      body = parser.call body, env
-                      env['rack.request.form_hash'] = env['rack.request.form_hash'] ? env['rack.request.form_hash'].merge(body) : body
-                      env['rack.request.form_input'] = env['rack.input']
-                    rescue Exception => e
-                      throw :error, :status => 400, :message => e.message
-                    end
-                  end
-                else
-                  throw :error, :status => 406, :message => 'The requested content-type is not supported.'
-                end
+                read_rack_input(body) if body && body.length > 0
               ensure
-                env['rack.input'].rewind
+                input.rewind
               end
             end
+          end
+        end
+
+        # store parsed input in env['api.request.body']
+        def read_rack_input(body)
+          fmt = mime_types[request.media_type] if request.media_type
+          fmt ||= options[:default_format]
+          if content_type_for(fmt)
+            parser = Grape::Parser::Base.parser_for fmt, options
+            if parser
+              begin
+                body = (env['api.request.body'] = parser.call(body, env))
+                if body.is_a?(Hash)
+                  env['rack.request.form_hash'] = env['rack.request.form_hash'] ?
+                    env['rack.request.form_hash'].merge(body) :
+                    body
+                  env['rack.request.form_input'] = env['rack.input']
+                end
+              rescue Exception => e
+                throw :error, :status => 400, :message => e.message
+              end
+            else
+              env['api.request.body'] = body
+            end
+          else
+            throw :error, :status => 406, :message => "The requested content-type '#{request.media_type}' is not supported."
           end
         end
 
@@ -68,7 +89,7 @@ module Grape
           if content_type_for(fmt)
             env['api.format'] = fmt
           else
-            throw :error, :status => 406, :message => 'The requested format is not supported.'
+            throw :error, :status => 406, :message => "The requested format '#{fmt}' is not supported."
           end
         end
 
@@ -101,10 +122,19 @@ module Grape
 
         def mime_array
           accept = headers['accept'] or return []
+          accept_into_mime_and_quality = %r(
+            (
+              \w+/[\w+.-]+)     # eg application/vnd.example.myformat+xml
+            (?:
+             (?:;[^,]*?)?       # optionally multiple formats in a row
+             ;\s*q=([\d.]+)     # optional "quality" preference (eg q=0.5)
+            )?
+          )x  # x = extended regular expression with comments etc
+          vendor_prefix_pattern = %r(vnd\.[^+]+\+)
 
-          accept.gsub(/\b/,'').scan(%r((\w+/[\w+.-]+)(?:(?:;[^,]*?)?;\s*q=([\d.]+))?)).sort_by { |_, q| -q.to_f }.map {|mime, _|
-            mime.sub(%r(vnd\.[^+]+\+), '')
-          }
+          accept.scan(accept_into_mime_and_quality).
+            sort_by { |_, quality_preference| -quality_preference.to_f }.
+            map {|mime, _| mime.sub(vendor_prefix_pattern, '') }
         end
 
     end

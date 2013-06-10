@@ -6,7 +6,10 @@ require 'rack/accept'
 require 'rack/auth/basic'
 require 'rack/auth/digest/md5'
 require 'hashie'
-require 'active_support/all'
+require 'active_support/core_ext/hash/indifferent_access'
+require 'active_support/ordered_hash'
+require 'active_support/core_ext/object/conversions'
+require 'active_support/core_ext/array/extract_options'
 require 'grape/util/deep_merge'
 require 'grape/util/content_types'
 require 'multi_json'
@@ -20,8 +23,10 @@ module Grape
   autoload :API,                 'grape/api'
   autoload :Endpoint,            'grape/endpoint'
   autoload :Route,               'grape/route'
+  autoload :Namespace,           'grape/namespace'
   autoload :Cookies,             'grape/cookies'
   autoload :Validations,         'grape/validations'
+  autoload :Request,             'grape/http/request'
 
   module Exceptions
     autoload :Base,                           'grape/exceptions/base'
@@ -70,9 +75,10 @@ module Grape
     end
 
     module Versioner
-      autoload :Path,           'grape/middleware/versioner/path'
-      autoload :Header,         'grape/middleware/versioner/header'
-      autoload :Param,          'grape/middleware/versioner/param'
+      autoload :Path,                 'grape/middleware/versioner/path'
+      autoload :Header,               'grape/middleware/versioner/header'
+      autoload :Param,                'grape/middleware/versioner/param'
+      autoload :AcceptVersionHeader,  'grape/middleware/versioner/accept_version_header'
     end
   end
 
