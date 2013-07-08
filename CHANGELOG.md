@@ -18,7 +18,7 @@ Next Release
 * [#408](https://github.com/intridea/grape/pull/408): Fix: Goliath passes request header keys as symbols not strings - [@bobek](https://github.com/bobek).
 * [#417](https://github.com/intridea/grape/issues/417): Fix: Rails 4 does not rewind input, causes POSTed data to be empty - [@dblock](https://github.com/dblock).
 * [#423](https://github.com/intridea/grape/pull/423): Fix: `Grape::Endpoint#declared` now correctly handles nested params (ie. params declared with `group`) - [@jbarreneche](https://github.com/jbarreneche).
-* Your contribution here.
+* Revert 0.4.0 change to JSON-escape String's, as this does not work properly with Rabl presenter (it double-escapes the JSON).
 
 0.4.1 (4/1/2013)
 ================

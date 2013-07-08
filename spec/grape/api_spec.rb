@@ -375,7 +375,11 @@ describe Grape::API do
             end
             send verb, '/', MultiJson.dump(object), { 'CONTENT_TYPE' => 'application/json' }
             last_response.status.should == (verb == :post ? 201 : 200)
-            last_response.body.should eql MultiJson.dump(object)
+            if object.nil?
+              last_response.body.should eql 'null'
+            else
+              last_response.body.should eql object.to_s
+            end
             last_request.params.should eql Hash.new
           end
           it "stores input in api.request.input" do
@@ -385,7 +389,7 @@ describe Grape::API do
             end
             send verb, '/', MultiJson.dump(object), { 'CONTENT_TYPE' => 'application/json' }
             last_response.status.should == (verb == :post ? 201 : 200)
-            last_response.body.should eql MultiJson.dump(object).to_json
+            last_response.body.should eql MultiJson.dump(object)
           end
           context "chunked transfer encoding" do
             it "stores input in api.request.input" do
@@ -395,7 +399,7 @@ describe Grape::API do
               end
               send verb, '/', MultiJson.dump(object), { 'CONTENT_TYPE' => 'application/json', 'HTTP_TRANSFER_ENCODING' => 'chunked', 'CONTENT_LENGTH' => nil  }
               last_response.status.should == (verb == :post ? 201 : 200)
-              last_response.body.should eql MultiJson.dump(object).to_json
+              last_response.body.should eql MultiJson.dump(object)
             end
           end
         end
@@ -1465,6 +1469,8 @@ describe Grape::API do
   end
 
   context 'desc' do
+    desc_alias = :description
+
     it 'empty array of routes' do
       subject.routes.should == []
     end
@@ -1541,12 +1547,12 @@ describe Grape::API do
     it 'merges the parameters of the namespace with the parameters of the method' do
       subject.desc "namespace"
       subject.params do
-        requires :ns_param, :desc => "namespace parameter"
+        requires :ns_param, desc_alias => "namespace parameter"
       end
       subject.namespace 'ns' do
         desc "method"
         params do
-          optional :method_param, :desc => "method parameter"
+          optional :method_param, desc_alias => "method parameter"
         end
         get 'method' do ; end
       end
@@ -1555,8 +1561,8 @@ describe Grape::API do
       }.should eq [
         { :description => "method",
           :params => {
-            "ns_param" => { :required => true, :desc => "namespace parameter" },
-            "method_param" => { :required => false, :desc => "method parameter" }
+            "ns_param" => { :required => true, desc_alias => "namespace parameter" },
+            "method_param" => { :required => false, desc_alias => "method parameter" }
           }
         }
       ]
@@ -1586,10 +1592,10 @@ describe Grape::API do
       }.should eq [
         { :description => "method",
           :params => {
-            "ns_param" => { :required => true, :desc => "ns param 2" },
-            "ns1_param" => { :required => true, :desc => "ns1 param" },
-            "ns2_param" => { :required => true, :desc => "ns2 param" },
-            "method_param" => { :required => false, :desc => "method param" }
+            "ns_param" => { :required => true, desc_alias => "ns param 2" },
+            "ns1_param" => { :required => true, desc_alias => "ns1 param" },
+            "ns2_param" => { :required => true, desc_alias => "ns2 param" },
+            "method_param" => { :required => false, desc_alias => "method param" }
           }
         }
       ]
@@ -1598,12 +1604,12 @@ describe Grape::API do
       subject.desc "method"
       subject.params do
         group :group1 do
-          optional :param1, :desc => "group1 param1 desc"
-          requires :param2, :desc => "group1 param2 desc"
+          optional :param1, desc_alias => "group1 param1 desc"
+          requires :param2, desc_alias => "group1 param2 desc"
         end
         group :group2 do
-          optional :param1, :desc => "group2 param1 desc"
-          requires :param2, :desc => "group2 param2 desc"
+          optional :param1, desc_alias => "group2 param1 desc"
+          requires :param2, desc_alias => "group2 param2 desc"
         end
       end
       subject.get "method" do ; end
@@ -1611,10 +1617,10 @@ describe Grape::API do
       subject.routes.map { |route|
         route.route_params
       }.should eq [{
-        "group1[param1]" => { :required => false, :desc => "group1 param1 desc" },
-        "group1[param2]" => { :required => true, :desc => "group1 param2 desc" },
-        "group2[param1]" => { :required => false, :desc => "group2 param1 desc" },
-        "group2[param2]" => { :required => true, :desc => "group2 param2 desc" }
+        "group1[param1]" => { :required => false, desc_alias => "group1 param1 desc" },
+        "group1[param2]" => { :required => true, desc_alias => "group1 param2 desc" },
+        "group2[param1]" => { :required => false, desc_alias => "group2 param1 desc" },
+        "group2[param2]" => { :required => true, desc_alias => "group2 param2 desc" }
       }]
     end
     it 'uses full name of parameters in nested groups' do
@@ -1631,8 +1637,8 @@ describe Grape::API do
       }.should eq [
         { :description => "nesting",
           :params => {
-            "root_param" => { :required => true, :desc => "root param" },
-            "nested[nested_param]" => { :required => true, :desc => "nested param" }
+            "root_param" => { :required => true, desc_alias => "root param" },
+            "nested[nested_param]" => { :required => true, desc_alias => "nested param" }
           }
         }
       ]
@@ -1645,7 +1651,7 @@ describe Grape::API do
       subject.routes.map { |route|
         { :description => route.route_description, :params => route.route_params }
       }.should eq [
-        { :description => nil, :params => { "one_param" => { :required => true, :desc => "one param" } } }
+        { :description => nil, :params => { "one_param" => { :required => true, desc_alias => "one param" } } }
       ]
     end
     it 'does not symbolize params' do
