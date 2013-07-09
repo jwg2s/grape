@@ -142,7 +142,7 @@ module Grape
       def level(level, options = {})
         level = :any if level == '*'
         level = level.to_sym.downcase
-        level = [:account,:contact,:advisor,:advisory_firm,:segment,:bundle,:any,:none].include?(level) ? level : :none
+        level = [:account,:contact,:advisor,:firm,:segment,:bundle,:any,:none].include?(level) ? level : :none
         @last_level = options.merge(:level => level)
       end
 
