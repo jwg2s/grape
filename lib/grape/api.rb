@@ -160,6 +160,18 @@ module Grape
         @last_varies = options.merge(:varies => tiers)
       end
 
+      # Add root_namespace to the next namespace or function.
+      def root_namespace(namespace, options = {})
+        namespace = namespace.to_sym
+        @last_root_namespace = options.merge(:root_namespace => namespace)
+      end
+
+      # Add action to the next namespace or function.
+      def action(action, options = {})
+        action = action.to_sym
+        @last_action = options.merge(:action => action)
+      end
+
       # Specify the default format for the API's serializers.
       # May be `:json` or `:txt` (default).
       def default_format(new_format = nil)
@@ -367,7 +379,7 @@ module Grape
         endpoint_options = {
           :method => methods,
           :path => paths,
-          :route_options => (@namespace_description || {}).deep_merge(@last_description || {}).deep_merge(@namespace_detail || {}).deep_merge(@last_detail || {}).deep_merge(@namespace_terms || {}).deep_merge(@last_terms || {}).deep_merge(@namespace_tier || {}).deep_merge(@last_tier || {}).deep_merge(@namespace_level || {}).deep_merge(@last_level || {}).deep_merge(route_options || {}).deep_merge(@namespace_varies || {}).deep_merge(@last_varies || {})
+          :route_options => (@namespace_description || {}).deep_merge(@last_description || {}).deep_merge(@namespace_detail || {}).deep_merge(@last_detail || {}).deep_merge(@namespace_terms || {}).deep_merge(@last_terms || {}).deep_merge(@namespace_tier || {}).deep_merge(@last_tier || {}).deep_merge(@namespace_level || {}).deep_merge(@last_level || {}).deep_merge(@namespace_varies || {}).deep_merge(@last_varies || {}).deep_merge(@namespace_root_namespace || {}).deep_merge(@last_root_namespace || {}).deep_merge(@namespace_action || {}).deep_merge(@last_action || {}).deep_merge(route_options || {})
         }
         endpoints << Grape::Endpoint.new(settings.clone, endpoint_options, &block)
 
@@ -377,6 +389,8 @@ module Grape
         @last_tier = nil
         @last_level = nil
         @last_varies = nil
+        @last_root_namespace = nil
+        @last_action = nil
         reset_validations!
       end
 
@@ -420,6 +434,12 @@ module Grape
           previous_namespace_varies = @namespace_varies
           @namespace_varies = (@namespace_varies || {}).deep_merge(@last_varies || {})
           @last_varies = nil
+          previous_namespace_root_namespace = @namespace_root_namespace
+          @namespace_root_namespace = (@namespace_root_namespace || {}).deep_merge(@last_root_namespace || {})
+          @last_root_namespace = nil
+          previous_namespace_action = @namespace_action
+          @namespace_action = (@namespace_action || {}).deep_merge(@last_action || {})
+          @last_action = nil
           nest(block) do
             set(:namespace, Namespace.new(space, options)) if space
           end
@@ -429,6 +449,8 @@ module Grape
           @namespace_tier = previous_namespace_tier
           @namespace_level = previous_namespace_level
           @namespace_varies = previous_namespace_varies
+          @namespace_root_namespace = previous_namespace_root_namespace
+          @namespace_action = previous_namespace_action
         else
           Namespace.joined_space_path(settings)
         end
