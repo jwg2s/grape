@@ -385,11 +385,9 @@ module Grape
 
         @last_description = nil
         @last_detail = nil
-        @last_terms = nil
         @last_tier = nil
         @last_level = nil
         @last_varies = nil
-        @last_root_namespace = nil
         @last_action = nil
         reset_validations!
       end
