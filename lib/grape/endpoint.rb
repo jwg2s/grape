@@ -182,6 +182,16 @@ module Grape
       env["api.endpoint"].options.fetch(:route_options,{}).fetch(:level,:any)
     end
 
+    # The parent namespace
+    def parent_namespace
+      env["api.endpoint"].options.fetch(:route_options,{}).fetch(:root_namespace,nil)
+    end
+
+    # The controller action
+    def action
+      env["api.endpoint"].options.fetch(:route_options,{}).fetch(:action,nil)
+    end
+
     # A filtering method that will return a hash
     # consisting only of keys that have been declared by a
     # `params` statement.
