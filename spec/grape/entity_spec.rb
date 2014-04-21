@@ -3,13 +3,16 @@ require 'grape_entity'
 
 describe Grape::Entity do
   subject { Class.new(Grape::API) }
-  def app; subject end
+
+  def app
+    subject
+  end
 
   describe '#present' do
     it 'sets the object as the body if no options are provided' do
       subject.get '/example' do
-        present({:abc => 'def'})
-        body.should == {:abc => 'def'}
+        present(abc: 'def')
+        body.should == { abc: 'def' }
       end
       get '/example'
     end
@@ -18,33 +21,37 @@ describe Grape::Entity do
       subject.get '/example' do
         entity_mock = Object.new
         entity_mock.should_receive(:represent)
-        present Object.new, :with => entity_mock
+        present Object.new, with: entity_mock
       end
       get '/example'
     end
 
     it 'pulls a representation from the class options if it exists' do
       entity = Class.new(Grape::Entity)
-      entity.stub!(:represent).and_return("Hiya")
+      allow(entity).to receive(:represent).and_return("Hiya")
 
-      subject.represent Object, :with => entity
+      subject.represent Object, with: entity
       subject.get '/example' do
         present Object.new
       end
       get '/example'
-      last_response.body.should == 'Hiya'
+      expect(last_response.body).to eq('Hiya')
     end
 
     it 'pulls a representation from the class options if the presented object is a collection of objects' do
       entity = Class.new(Grape::Entity)
-      entity.stub!(:represent).and_return("Hiya")
+      allow(entity).to receive(:represent).and_return("Hiya")
 
-      class TestObject; end
-      class FakeCollection
-        def first; TestObject.new; end
+      class TestObject
       end
 
-      subject.represent TestObject, :with => entity
+      class FakeCollection
+        def first
+          TestObject.new
+        end
+      end
+
+      subject.represent TestObject, with: entity
       subject.get '/example' do
         present [TestObject.new]
       end
@@ -54,30 +61,30 @@ describe Grape::Entity do
       end
 
       get '/example'
-      last_response.body.should == "Hiya"
+      expect(last_response.body).to eq("Hiya")
 
       get '/example2'
-      last_response.body.should == "Hiya"
+      expect(last_response.body).to eq("Hiya")
     end
 
     it 'pulls a representation from the class ancestor if it exists' do
       entity = Class.new(Grape::Entity)
-      entity.stub!(:represent).and_return("Hiya")
+      allow(entity).to receive(:represent).and_return("Hiya")
 
       subclass = Class.new(Object)
 
-      subject.represent Object, :with => entity
+      subject.represent Object, with: entity
       subject.get '/example' do
         present subclass.new
       end
       get '/example'
-      last_response.body.should == 'Hiya'
+      expect(last_response.body).to eq('Hiya')
     end
 
     it 'automatically uses Klass::Entity if that exists' do
       some_model = Class.new
       entity = Class.new(Grape::Entity)
-      entity.stub!(:represent).and_return("Auto-detect!")
+      allow(entity).to receive(:represent).and_return("Auto-detect!")
 
       some_model.const_set :Entity, entity
 
@@ -85,13 +92,13 @@ describe Grape::Entity do
         present some_model.new
       end
       get '/example'
-      last_response.body.should == 'Auto-detect!'
+      expect(last_response.body).to eq('Auto-detect!')
     end
 
     it 'automatically uses Klass::Entity based on the first object in the collection being presented' do
       some_model = Class.new
       entity = Class.new(Grape::Entity)
-      entity.stub!(:represent).and_return("Auto-detect!")
+      allow(entity).to receive(:represent).and_return("Auto-detect!")
 
       some_model.const_set :Entity, entity
 
@@ -99,18 +106,63 @@ describe Grape::Entity do
         present [some_model.new]
       end
       get '/example'
-      last_response.body.should == 'Auto-detect!'
+      expect(last_response.body).to eq('Auto-detect!')
+    end
+
+    it 'does not run autodetection for Entity when explicitely provided' do
+      entity = Class.new(Grape::Entity)
+      some_array = Array.new
+
+      subject.get '/example' do
+        present some_array, with: entity
+      end
+
+      expect(some_array).not_to receive(:first)
+      get '/example'
+    end
+
+    it 'does not use #first method on ActiveRecord::Relation to prevent needless sql query' do
+      entity = Class.new(Grape::Entity)
+      some_relation = Class.new
+      some_model = Class.new
+
+      allow(entity).to receive(:represent).and_return("Auto-detect!")
+      allow(some_relation).to receive(:first)
+      allow(some_relation).to receive(:klass).and_return(some_model)
+
+      some_model.const_set :Entity, entity
+
+      subject.get '/example' do
+        present some_relation
+      end
+
+      expect(some_relation).not_to receive(:first)
+      get '/example'
+      expect(last_response.body).to eq('Auto-detect!')
+    end
+
+    it 'autodetection does not use Entity if it is not a presenter' do
+      some_model = Class.new
+      entity = Class.new
+
+      some_model.class.const_set :Entity, entity
+
+      subject.get '/example' do
+        present some_model
+      end
+      get '/example'
+      expect(entity).not_to receive(:represent)
     end
 
     it 'adds a root key to the output if one is given' do
       subject.get '/example' do
-        present({:abc => 'def'}, :root => :root)
-        body.should == {:root => {:abc => 'def'}}
+        present({ abc: 'def' }, root: :root)
+        body.should == { root: { abc: 'def' } }
       end
       get '/example'
     end
 
-    [ :json, :serializable_hash ].each do |format|
+    [:json, :serializable_hash].each do |format|
 
       it 'presents with #{format}' do
         entity = Class.new(Grape::Entity)
@@ -125,12 +177,12 @@ describe Grape::Entity do
               @id = id
             end
           end
-          present c.new(1), :with => entity
+          present c.new(1), with: entity
         end
 
         get '/example'
-        last_response.status.should == 200
-        last_response.body.should == '{"example":{"id":1}}'
+        expect(last_response.status).to eq(200)
+        expect(last_response.body).to eq('{"example":{"id":1}}')
       end
 
       it 'presents with #{format} collection' do
@@ -146,13 +198,13 @@ describe Grape::Entity do
               @id = id
             end
           end
-          examples = [ c.new(1), c.new(2) ]
-          present examples, :with => entity
+          examples = [c.new(1), c.new(2)]
+          present examples, with: entity
         end
 
         get '/examples'
-        last_response.status.should == 200
-        last_response.body.should == '{"examples":[{"id":1},{"id":2}]}'
+        expect(last_response.status).to eq(200)
+        expect(last_response.body).to eq('{"examples":[{"id":1},{"id":2}]}')
       end
 
     end
@@ -171,12 +223,12 @@ describe Grape::Entity do
             @name = args[:name] || "no name set"
           end
         end
-        present c.new({:name => "johnnyiller"}), :with => entity
+        present c.new(name: "johnnyiller"), with: entity
       end
       get '/example'
-      last_response.status.should == 200
-      last_response.headers['Content-type'].should == "application/xml"
-      last_response.body.should == <<-XML
+      expect(last_response.status).to eq(200)
+      expect(last_response.headers['Content-type']).to eq("application/xml")
+      expect(last_response.body).to eq <<-XML
 <?xml version="1.0" encoding="UTF-8"?>
 <hash>
   <example>
@@ -200,12 +252,12 @@ XML
             @name = args[:name] || "no name set"
           end
         end
-        present c.new({:name => "johnnyiller"}), :with => entity
+        present c.new(name: "johnnyiller"), with: entity
       end
       get '/example'
-      last_response.status.should == 200
-      last_response.headers['Content-type'].should == "application/json"
-      last_response.body.should == '{"example":{"name":"johnnyiller"}}'
+      expect(last_response.status).to eq(200)
+      expect(last_response.headers['Content-type']).to eq("application/json")
+      expect(last_response.body).to eq('{"example":{"name":"johnnyiller"}}')
     end
 
     it 'presents with jsonp utilising Rack::JSONP' do
@@ -229,22 +281,16 @@ XML
           end
         end
 
-        present c.new({:name => "johnnyiller"}), :with => entity
+        present c.new(name: "johnnyiller"), with: entity
       end
 
       get '/example?callback=abcDef'
-      last_response.status.should == 200
-      last_response.headers['Content-type'].should == "application/javascript"
-      last_response.body.should == 'abcDef({"example":{"name":"johnnyiller"}})'
+      expect(last_response.status).to eq(200)
+      expect(last_response.headers['Content-type']).to eq("application/javascript")
+      expect(last_response.body).to eq('abcDef({"example":{"name":"johnnyiller"}})')
     end
 
     context "present with multiple entities" do
-      let(:user) do
-      end
-
-      before :each do
-      end
-
       it "present with multiple entities using optional symbol" do
         user = Class.new do
           attr_reader :name
@@ -252,8 +298,8 @@ XML
             @name = args[:name] || "no name set"
           end
         end
-        user1 = user.new({:name => 'user1'})
-        user2 = user.new({:name => 'user2'})
+        user1 = user.new(name: 'user1')
+        user2 = user.new(name: 'user2')
 
         entity = Class.new(Grape::Entity)
         entity.expose :name
@@ -261,21 +307,18 @@ XML
         subject.format :json
         subject.get '/example' do
           present :page, 1
-          present :user1, user1, :with => entity
-          present :user2, user2, :with => entity
+          present :user1, user1, with: entity
+          present :user2, user2, with: entity
         end
         get '/example'
         expect_response_json = {
           "page"  => 1,
-          "user1" => {"name" => "user1"},
-          "user2" => {"name" => "user2"}
+          "user1" => { "name" => "user1" },
+          "user2" => { "name" => "user2" }
         }
-        JSON(last_response.body).should == expect_response_json
+        expect(JSON(last_response.body)).to eq(expect_response_json)
       end
 
     end
-
-
   end
-
 end

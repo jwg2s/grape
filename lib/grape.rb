@@ -6,6 +6,7 @@ require 'rack/accept'
 require 'rack/auth/basic'
 require 'rack/auth/digest/md5'
 require 'hashie'
+require 'set'
 require 'active_support/core_ext/hash/indifferent_access'
 require 'active_support/ordered_hash'
 require 'active_support/core_ext/object/conversions'
@@ -16,14 +17,19 @@ require 'multi_json'
 require 'multi_xml'
 require 'virtus'
 require 'i18n'
+require 'thread'
 
 I18n.load_path << File.expand_path('../grape/locale/en.yml', __FILE__)
 
 module Grape
   autoload :API,                 'grape/api'
   autoload :Endpoint,            'grape/endpoint'
+
   autoload :Route,               'grape/route'
   autoload :Namespace,           'grape/namespace'
+
+  autoload :Path,                'grape/path'
+
   autoload :Cookies,             'grape/cookies'
   autoload :Validations,         'grape/validations'
   autoload :Request,             'grape/http/request'
@@ -31,6 +37,7 @@ module Grape
   module Exceptions
     autoload :Base,                           'grape/exceptions/base'
     autoload :Validation,                     'grape/exceptions/validation'
+    autoload :ValidationErrors,               'grape/exceptions/validation_errors'
     autoload :MissingVendorOption,            'grape/exceptions/missing_vendor_option'
     autoload :MissingMimeType,                'grape/exceptions/missing_mime_type'
     autoload :MissingOption,                  'grape/exceptions/missing_option'
@@ -39,6 +46,7 @@ module Grape
     autoload :UnknownValidator,               'grape/exceptions/unknown_validator'
     autoload :UnknownOptions,                 'grape/exceptions/unknown_options'
     autoload :InvalidWithOptionForRepresent,  'grape/exceptions/invalid_with_option_for_represent'
+    autoload :IncompatibleOptionValues,       'grape/exceptions/incompatible_option_values'
   end
 
   module ErrorFormatter
@@ -70,6 +78,7 @@ module Grape
 
     module Auth
       autoload :OAuth2,         'grape/middleware/auth/oauth2'
+      autoload :Base,	          'grape/middleware/auth/base'
       autoload :Basic,          'grape/middleware/auth/basic'
       autoload :Digest,	        'grape/middleware/auth/digest'
     end

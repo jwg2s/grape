@@ -1,14 +1,13 @@
 module Grape
   module ErrorFormatter
     module Base
-
       class << self
-
         FORMATTERS = {
-          :serializable_hash => Grape::ErrorFormatter::Json,
-          :json => Grape::ErrorFormatter::Json,
-          :txt => Grape::ErrorFormatter::Txt,
-          :xml => Grape::ErrorFormatter::Xml
+          serializable_hash: Grape::ErrorFormatter::Json,
+          json: Grape::ErrorFormatter::Json,
+          jsonapi: Grape::ErrorFormatter::Json,
+          txt: Grape::ErrorFormatter::Txt,
+          xml: Grape::ErrorFormatter::Xml
         }
 
         def formatters(options)
@@ -26,7 +25,6 @@ module Grape
             spec
           end
         end
-
       end
     end
   end

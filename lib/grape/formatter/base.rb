@@ -1,14 +1,13 @@
 module Grape
   module Formatter
     module Base
-
       class << self
-
         FORMATTERS = {
-          :json => Grape::Formatter::Json,
-          :serializable_hash => Grape::Formatter::SerializableHash,
-          :txt => Grape::Formatter::Txt,
-          :xml => Grape::Formatter::Xml
+          json: Grape::Formatter::Json,
+          jsonapi: Grape::Formatter::Json,
+          serializable_hash: Grape::Formatter::SerializableHash,
+          txt: Grape::Formatter::Txt,
+          xml: Grape::Formatter::Xml
         }
 
         def formatters(options)
@@ -26,7 +25,6 @@ module Grape
             spec
           end
         end
-
       end
     end
   end

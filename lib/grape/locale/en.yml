@@ -1,10 +1,12 @@
 en:
   grape:
     errors:
+      format: ! '%{attribute} %{message}'
       messages:
-        coerce: 'invalid parameter: %{attribute}'
-        presence: 'missing parameter: %{attribute}'
-        regexp: 'invalid parameter: %{attribute}'
+        coerce: 'is invalid'
+        presence: 'is missing'
+        regexp: 'is invalid'
+        values: 'does not have a valid value'
         missing_vendor_option:
           problem: 'missing :vendor option.'
           summary: 'when version using header, you must specify :vendor option. '
@@ -12,7 +14,7 @@ en:
         missing_mime_type:
           problem: 'missing mime type for %{new_format}'
           resolution:
-            "you can choose exist mime type from Grape::ContentTypes::CONTENT_TYPES
+            "you can choose existing mime type from Grape::ContentTypes::CONTENT_TYPES
             or add your own with content_type :%{new_format}, 'application/%{new_format}'
             "
         invalid_with_option_for_represent:
@@ -25,3 +27,5 @@ en:
           resolution: 'available strategy for :using is :path, :header, :param'
         unknown_validator: 'unknown validator: %{validator_type}'
         unknown_options: 'unknown options: %{options}'
+        incompatible_option_values: '%{option1}: %{value1} is incompatible with %{option2}: %{value2}'
+        mutual_exclusion: 'are mutually exclusive'

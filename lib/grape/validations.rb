@@ -1,7 +1,5 @@
 module Grape
-
   module Validations
-
     ##
     # All validators must inherit from this class.
     #
@@ -21,7 +19,7 @@ module Grape
       def validate!(params)
         attributes = AttributesIterator.new(self, @scope, params)
         attributes.each do |resource_params, attr_name|
-          if @required || resource_params.has_key?(attr_name)
+          if @required || resource_params.key?(attr_name)
             validate_param!(attr_name, resource_params)
           end
         end
@@ -45,14 +43,12 @@ module Grape
         end
       end
 
-    private
-
       def self.convert_to_short_name(klass)
-        ret = klass.name.gsub(/::/, '/').
-          gsub(/([A-Z]+)([A-Z][a-z])/,'\1_\2').
-          gsub(/([a-z\d])([A-Z])/,'\1_\2').
-          tr("-", "_").
-          downcase
+        ret = klass.name.gsub(/::/, '/')
+          .gsub(/([A-Z]+)([A-Z][a-z])/, '\1_\2')
+          .gsub(/([a-z\d])([A-Z])/, '\1_\2')
+          .tr("-", "_")
+          .downcase
         File.basename(ret, '_validator')
       end
     end
@@ -64,7 +60,6 @@ module Grape
         @option = options
         super
       end
-
     end
 
     # We define Validator::inherited here so SingleOptionValidator
@@ -72,7 +67,7 @@ module Grape
     class Validator
       def self.inherited(klass)
         short_name = convert_to_short_name(klass)
-        Validations::register_validator(short_name, klass)
+        Validations.register_validator(short_name, klass)
       end
     end
 
@@ -89,10 +84,12 @@ module Grape
     class ParamsScope
       attr_accessor :element, :parent
 
-      def initialize(api, element, parent, &block)
-        @element = element
-        @parent  = parent
-        @api     = api
+      def initialize(opts, &block)
+        @element  = opts[:element]
+        @parent   = opts[:parent]
+        @api      = opts[:api]
+        @optional = opts[:optional] || false
+        @type     = opts[:type]
         @declared_params = []
 
         instance_eval(&block)
@@ -100,48 +97,114 @@ module Grape
         configure_declared_params
       end
 
-      def requires(*attrs)
-        validations = {:presence => true}
-        if attrs.last.is_a?(Hash)
-          validations.merge!(attrs.pop)
-        end
-
-        push_declared_params(attrs)
-        validates(attrs, validations)
+      def should_validate?(parameters)
+        return false if @optional && params(parameters).respond_to?(:all?) && params(parameters).all?(&:blank?)
+        return true if parent.nil?
+        parent.should_validate?(parameters)
       end
 
-      def optional(*attrs)
+      def requires(*attrs, &block)
+        orig_attrs = attrs.clone
+
+        opts = attrs.last.is_a?(Hash) ? attrs.pop : nil
+
+        if opts && opts[:using]
+          require_required_and_optional_fields(attrs.first, opts)
+        else
+          validate_attributes(attrs, opts, &block)
+
+          block_given? ? new_scope(orig_attrs, &block) :
+            push_declared_params(attrs)
+        end
+      end
+
+      def optional(*attrs, &block)
+        orig_attrs = attrs
+
         validations = {}
-        if attrs.last.is_a?(Hash)
-          validations.merge!(attrs.pop)
-        end
-
-        push_declared_params(attrs)
+        validations.merge!(attrs.pop) if attrs.last.is_a?(Hash)
+        validations[:type] ||= Array if block_given?
         validates(attrs, validations)
+
+        block_given? ? new_scope(orig_attrs, true, &block) :
+          push_declared_params(attrs)
       end
 
-      def group(element, &block)
-        ParamsScope.new(@api, element, self, &block)
+      def mutually_exclusive(*attrs)
+        validates(attrs, mutual_exclusion: true)
+      end
+
+      def group(*attrs, &block)
+        requires(*attrs, &block)
       end
 
       def params(params)
         params = @parent.params(params) if @parent
-        params = params[@element] || {} if @element
+        if @element
+          if params.is_a?(Array)
+            params = params.flat_map { |el| el[@element] || {} }
+          elsif params.is_a?(Hash)
+            params = params[@element] || {}
+          else
+            params = {}
+          end
+        end
         params
       end
+
+      def use(*names)
+        named_params = @api.settings[:named_params] || {}
+        names.each do |name|
+          params_block = named_params.fetch(name) do
+            raise "Params :#{name} not found!"
+          end
+          instance_eval(&params_block)
+        end
+      end
+      alias_method :use_scope, :use
+      alias_method :includes, :use
 
       def full_name(name)
         return "#{@parent.full_name(@element)}[#{name}]" if @parent
         name.to_s
       end
 
-    protected
+      protected
 
       def push_declared_params(attrs)
         @declared_params.concat attrs
       end
 
-    private
+      private
+
+      def require_required_and_optional_fields(context, opts)
+        if context == :all
+          optional_fields = Array(opts[:except])
+          required_fields = opts[:using].keys - optional_fields
+        else # context == :none
+          required_fields = Array(opts[:except])
+          optional_fields = opts[:using].keys - required_fields
+        end
+        required_fields.each do |field|
+          requires(field, opts[:using][field])
+        end
+        optional_fields.each do |field|
+          optional(field, opts[:using][field])
+        end
+      end
+
+      def validate_attributes(attrs, opts, &block)
+        validations = { presence: true }
+        validations.merge!(opts) if opts
+        validations[:type] ||= Array if block
+        validates(attrs, validations)
+      end
+
+      def new_scope(attrs, optional = false, &block)
+        opts = attrs[1] || { type: Array }
+        raise ArgumentError unless opts.keys.to_set.subset? [:type].to_set
+        ParamsScope.new(api: @api, element: attrs.first, parent: self, optional: optional, type: opts[:type], &block)
+      end
 
       # Pushes declared params to parent or settings
       def configure_declared_params
@@ -154,16 +217,22 @@ module Grape
       end
 
       def validates(attrs, validations)
-        doc_attrs = { :required => validations.keys.include?(:presence) }
+        doc_attrs = { required: validations.keys.include?(:presence) }
 
         # special case (type = coerce)
-        if validations[:type]
-          validations[:coerce] = validations.delete(:type)
-        end
+        validations[:coerce] = validations.delete(:type) if validations.key?(:type)
 
-        if coerce_type = validations[:coerce]
-          doc_attrs[:type] = coerce_type.to_s
-        end
+        coerce_type = validations[:coerce]
+        doc_attrs[:type] = coerce_type.to_s if coerce_type
+
+        desc = validations.delete(:desc)
+        doc_attrs[:desc] = desc if desc
+
+        default = validations[:default]
+        doc_attrs[:default] = default if default
+
+        values = validations[:values]
+        doc_attrs[:values] = values if values
 
         if regexp = validations[:regexp]
           doc_attrs[:regexp] = regexp.inspect
@@ -181,22 +250,33 @@ module Grape
           doc_attrs[:example] = example.to_s
         end
 
-        if default = validations[:default]
-          doc_attrs[:default] = default
+        values = (values.is_a?(Proc) ? values.call : values)
+
+        # default value should be present in values array, if both exist
+        if default && values && !values.include?(default)
+          raise Grape::Exceptions::IncompatibleOptionValues.new(:default, default, :values, values)
         end
 
-        full_attrs = attrs.collect{ |name| { :name => name, :full_name => full_name(name)} }
+        # type should be compatible with values array, if both exist
+        if coerce_type && values && values.any? { |v| !v.kind_of?(coerce_type) }
+          raise Grape::Exceptions::IncompatibleOptionValues.new(:type, coerce_type, :values, values)
+        end
+
+        doc_attrs[:documentation] = validations.delete(:documentation) if validations.key?(:documentation)
+
+        full_attrs = attrs.collect { |name| { name: name, full_name: full_name(name) } }
         @api.document_attribute(full_attrs, doc_attrs)
 
         # Validate for presence before any other validators
-        if validations.has_key?(:presence) && validations[:presence]
+        if validations.key?(:presence) && validations[:presence]
           validate('presence', validations[:presence], attrs, doc_attrs)
+          validations.delete(:presence)
         end
 
         # Before we run the rest of the validators, lets handle
         # whatever coercion so that we are working with correctly
         # type casted values
-        if validations.has_key? :coerce
+        if validations.key? :coerce
           validate('coerce', validations[:coerce], attrs, doc_attrs)
           validations.delete(:coerce)
         end
@@ -207,7 +287,7 @@ module Grape
       end
 
       def validate(type, options, attrs, doc_attrs)
-        validator_class = Validations::validators[type.to_s]
+        validator_class = Validations.validators[type.to_s]
 
         if validator_class
           (@api.settings.peek[:validations] ||= []) << validator_class.new(attrs, options, doc_attrs[:required], self)
@@ -215,7 +295,6 @@ module Grape
           raise Grape::Exceptions::UnknownValidator.new(type)
         end
       end
-
     end
 
     # This module is mixed into the API Class.
@@ -226,7 +305,7 @@ module Grape
       end
 
       def params(&block)
-        ParamsScope.new(self, nil, nil, &block)
+        ParamsScope.new(api: self, type: Hash, &block)
       end
 
       def document_attribute(names, opts)
@@ -237,9 +316,7 @@ module Grape
           @last_description[:params][name[:full_name].to_s].merge!(opts)
         end
       end
-
     end
-
   end
 end
 

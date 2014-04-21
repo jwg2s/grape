@@ -3,10 +3,10 @@ shared_examples_for 'versioning' do
     subject.format :txt
     subject.version 'v1', macro_options
     subject.get :hello do
-      "Version: #{request.env['api.version']}"
+      "Version: #{request.env['api.version'] }"
     end
     versioned_get '/hello', 'v1', macro_options
-    last_response.body.should eql "Version: v1"
+    expect(last_response.body).to eql "Version: v1"
   end
 
   it 'adds the prefix before the API version' do
@@ -14,10 +14,10 @@ shared_examples_for 'versioning' do
     subject.prefix 'api'
     subject.version 'v1', macro_options
     subject.get :hello do
-      "Version: #{request.env['api.version']}"
+      "Version: #{request.env['api.version'] }"
     end
-    versioned_get '/hello', 'v1', macro_options.merge(:prefix => 'api')
-    last_response.body.should eql "Version: v1"
+    versioned_get '/hello', 'v1', macro_options.merge(prefix: 'api')
+    expect(last_response.body).to eql "Version: v1"
   end
 
   it 'is able to specify version as a nesting' do
@@ -33,14 +33,14 @@ shared_examples_for 'versioning' do
     end
 
     versioned_get '/awesome', 'v1', macro_options
-    last_response.status.should eql 404
+    expect(last_response.status).to eql 404
 
     versioned_get '/awesome', 'v2', macro_options
-    last_response.status.should eql 200
+    expect(last_response.status).to eql 200
     versioned_get '/legacy', 'v1', macro_options
-    last_response.status.should eql 200
+    expect(last_response.status).to eql 200
     versioned_get '/legacy', 'v2', macro_options
-    last_response.status.should eql 404
+    expect(last_response.status).to eql 404
   end
 
   it 'is able to specify multiple versions' do
@@ -50,11 +50,11 @@ shared_examples_for 'versioning' do
     end
 
     versioned_get '/awesome', 'v1', macro_options
-    last_response.status.should eql 200
+    expect(last_response.status).to eql 200
     versioned_get '/awesome', 'v2', macro_options
-    last_response.status.should eql 200
+    expect(last_response.status).to eql 200
     versioned_get '/awesome', 'v3', macro_options
-    last_response.status.should eql 404
+    expect(last_response.status).to eql 404
   end
 
   context 'with different versions for the same endpoint' do
@@ -73,11 +73,11 @@ shared_examples_for 'versioning' do
         end
 
         versioned_get '/version', 'v2', macro_options
-        last_response.status.should == 200
-        last_response.body.should == 'v2'
+        expect(last_response.status).to eq(200)
+        expect(last_response.body).to eq('v2')
         versioned_get '/version', 'v1', macro_options
-        last_response.status.should == 200
-        last_response.body.should == 'version v1'
+        expect(last_response.status).to eq(200)
+        expect(last_response.body).to eq('version v1')
       end
     end
 
@@ -96,13 +96,13 @@ shared_examples_for 'versioning' do
           end
         end
 
-        versioned_get '/version', 'v1', macro_options.merge(:prefix => subject.prefix)
-        last_response.status.should == 200
-        last_response.body.should == 'version v1'
+        versioned_get '/version', 'v1', macro_options.merge(prefix: subject.prefix)
+        expect(last_response.status).to eq(200)
+        expect(last_response.body).to eq('version v1')
 
-        versioned_get '/version', 'v2', macro_options.merge(:prefix => subject.prefix)
-        last_response.status.should == 200
-        last_response.body.should == 'v2'
+        versioned_get '/version', 'v2', macro_options.merge(prefix: subject.prefix)
+        expect(last_response.status).to eq(200)
+        expect(last_response.body).to eq('v2')
       end
     end
   end
@@ -115,7 +115,7 @@ shared_examples_for 'versioning' do
       params[:version]
     end
     versioned_get '/api_version_with_version_param?version=1', 'v1', macro_options
-    last_response.body.should eql '1'
+    expect(last_response.body).to eql '1'
   end
 
 end

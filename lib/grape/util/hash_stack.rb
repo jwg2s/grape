@@ -46,7 +46,7 @@ module Grape
       #
       # @param key [Symbol] key to look for in hash frames
       # @return true if key exists, false otherwise
-      def has_key?(key)
+      def key?(key)
         (@stack.length - 1).downto(0).each do |i|
           return true if @stack[i].key? key
         end
@@ -84,7 +84,7 @@ module Grape
 
       # Prepend another HashStack's to self
       def prepend(hash_stack)
-        @stack.unshift *hash_stack.stack
+        @stack.unshift(*hash_stack.stack)
         self
       end
 
@@ -100,7 +100,7 @@ module Grape
       # @param key [Symbol] The key to gather
       # @return [Array]
       def gather(key)
-        stack.map{|s| s[key] }.flatten.compact.uniq
+        stack.flat_map { |s| s[key] }.compact.uniq
       end
 
       def to_s

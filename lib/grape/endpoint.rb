@@ -5,9 +5,21 @@ module Grape
   # from inside a `get`, `post`, etc.
   class Endpoint
     attr_accessor :block, :source, :options, :settings
-    attr_reader :env, :request
+    attr_reader :env, :request, :headers, :params
 
     class << self
+      def before_each(new_setup = false, &block)
+        if new_setup == false
+          if block_given?
+            @before_each = block
+          else
+            return @before_each
+          end
+        else
+          @before_each = new_setup
+        end
+      end
+
       # @api private
       #
       # Create an UnboundMethod that is appropriate for executing an endpoint
@@ -33,27 +45,34 @@ module Grape
     end
 
     def initialize(settings, options = {}, &block)
+      require_option(options, :path)
+      require_option(options, :method)
+
       @settings = settings
+      @options = options
+
+      @options[:path] = Array(options[:path])
+      @options[:path] << '/' if options[:path].empty?
+
+      @options[:method] = Array(options[:method])
+      @options[:route_options] ||= {}
+
       if block_given?
-        method_name = [
-          options[:method],
-          Namespace.joined_space(settings),
-          settings.gather(:mount_path).join("/"),
-          Array(options[:path]).join("/")
-        ].join(" ")
         @source = block
         @block = self.class.generate_api_method(method_name, &block)
       end
-      @options = options
+    end
 
-      raise Grape::Exceptions::MissingOption.new(:path) unless options.key?(:path)
-      options[:path] = Array(options[:path])
-      options[:path] = ['/'] if options[:path].empty?
+    def require_option(options, key)
+      raise Grape::Exceptions::MissingOption.new(key) unless options.key?(key)
+    end
 
-      raise Grape::Exceptions::MissingOption.new(:method) unless options.key?(:method)
-      options[:method] = Array(options[:method])
-
-      options[:route_options] ||= {}
+    def method_name
+      [options[:method],
+       Namespace.joined_space(settings),
+       settings.gather(:mount_path).join('/'),
+       options[:path].join('/')
+     ].join(" ")
     end
 
     def routes
@@ -65,15 +84,15 @@ module Grape
         endpoints.each { |e| e.mount_in(route_set) }
       else
         routes.each do |route|
-          methods = [ route.route_method ]
-          if ! settings[:do_not_route_head] && route.route_method == "GET"
+          methods = [route.route_method]
+          if !settings[:do_not_route_head] && route.route_method == "GET"
             methods << "HEAD"
           end
           methods.each do |method|
             route_set.add_route(self, {
-              :path_info => route.route_compiled,
-              :request_method => method,
-            }, { :route_info => route })
+                                  path_info: route.route_compiled,
+                                  request_method: method
+            },  route_info: route)
           end
         end
       end
@@ -98,46 +117,28 @@ module Grape
           regex = Rack::Mount::RegexpWithNamedGroups.new(path)
           path_params = {}
           # named parameters in the api path
-          named_params = regex.named_captures.map { |nc| nc[0] } - [ 'version', 'format' ]
+          named_params = regex.named_captures.map { |nc| nc[0] } - %w(version format)
           named_params.each { |named_param| path_params[named_param] = "" }
           # route parameters declared via desc or appended to the api declaration
           route_params = (options[:route_options][:params] || {})
           path_params.merge!(route_params)
           request_method = (method.to_s.upcase unless method == :any)
-          routes << Route.new(options[:route_options].clone.merge({
-            :prefix => settings[:root_prefix],
-            :version => settings[:version] ? settings[:version].join('|') : nil,
-            :namespace => namespace,
-            :method => request_method,
-            :path => prepared_path,
-            :params => path_params,
-            :compiled => path,
-            })
-          )
+          routes << Route.new(options[:route_options].clone.merge(
+            prefix: settings[:root_prefix],
+            version: settings[:version] ? settings[:version].join('|') : nil,
+            namespace: namespace,
+            method: request_method,
+            path: prepared_path,
+            params: path_params,
+            compiled: path
+          ))
         end
       end
       routes
     end
 
     def prepare_path(path)
-      parts = []
-      parts << settings[:mount_path].to_s.split("/") if settings[:mount_path]
-      parts << settings[:root_prefix].to_s.split("/") if settings[:root_prefix]
-
-      uses_path_versioning = settings[:version] && settings[:version_options][:using] == :path
-      namespace_is_empty = namespace && (namespace.to_s =~ /^\s*$/ || namespace.to_s == '/')
-      path_is_empty = path && (path.to_s =~ /^\s*$/ || path.to_s == '/')
-
-      parts << ':version' if uses_path_versioning
-      if ! uses_path_versioning || (! namespace_is_empty || ! path_is_empty)
-        parts << namespace.to_s if namespace
-        parts << path.to_s if path
-        format_suffix = '(.:format)'
-      else
-        format_suffix = '(/.:format)'
-      end
-      parts = parts.flatten.select { |part| part != '/' }
-      Rack::Mount::Utils.normalize_path(parts.join('/') + format_suffix)
+      Path.prepare(path, namespace, settings)
     end
 
     def namespace
@@ -156,12 +157,14 @@ module Grape
     end
 
     def call!(env)
+      extend helpers
+
       env['api.endpoint'] = self
       if options[:app]
         options[:app].call(env)
       else
         builder = build_middleware
-        builder.run options[:app] || lambda{|env| self.run(env) }
+        builder.run options[:app] || lambda { |arg| run(arg) }
         builder.call(env)
       end
     end
@@ -194,45 +197,62 @@ module Grape
 
     # A filtering method that will return a hash
     # consisting only of keys that have been declared by a
-    # `params` statement.
+    # `params` statement against the current/target endpoint or parent
+    # namespaces
     #
     # @param params [Hash] The initial hash to filter. Usually this will just be `params`
-    # @param options [Hash] Can pass `:include_missing` and `:stringify` options.
-    def declared(params, options = {}, declared_params = settings[:declared_params])
+    # @param options [Hash] Can pass `:include_missing`, `:stringify` and `:include_parent_namespaces`
+    # options. `:include_parent_namespaces` defaults to true, hence must be set to false if
+    # you want only to return params declared against the current/target endpoint
+    def declared(params, options = {}, declared_params = nil)
       options[:include_missing] = true unless options.key?(:include_missing)
+      options[:include_parent_namespaces] = true unless options.key?(:include_parent_namespaces)
+      if declared_params.nil?
+        declared_params = !options[:include_parent_namespaces] ? settings[:declared_params] :
+          settings.gather(:declared_params)
+      end
 
       unless declared_params
         raise ArgumentError, "Tried to filter for declared parameters but none exist."
       end
 
-      declared_params.inject({}) do |hash, key|
-        key = { key => nil } unless key.is_a? Hash
+      if params.is_a? Array
+        params.map do |param|
+          declared(param || {}, options, declared_params)
+        end
+      else
+        declared_params.inject({}) do |hash, key|
+          key = { key => nil } unless key.is_a? Hash
 
-        key.each_pair do |parent, children|
-          output_key = options[:stringify] ? parent.to_s : parent.to_sym
-          if params.key?(parent) || options[:include_missing]
-            hash[output_key] = if children
-              declared(params[parent] || {}, options, Array(children))
-            else
-              params[parent]
+          key.each_pair do |parent, children|
+            output_key = options[:stringify] ? parent.to_s : parent.to_sym
+            if params.key?(parent) || options[:include_missing]
+              hash[output_key] = if children
+                                   declared(params[parent] || {}, options, Array(children))
+                                 else
+                                   params[parent]
+                                 end
             end
           end
-        end
 
-        hash
+          hash
+        end
       end
     end
 
     # The API version as specified in the URL.
-    def version; env['api.version'] end
+    def version
+      env['api.version']
+    end
 
     # End the request and display an error to the
     # end user with the specified message.
     #
     # @param message [String] The message to display.
-    # @param status [Integer] the HTTP Status Code. Defaults to 403.
-    def error!(message, status=403)
-      throw :error, :message => message, :status => status
+    # @param status [Integer] the HTTP Status Code. Defaults to default_error_status, 500 if not set.
+    def error!(message, status = nil, headers = nil)
+      status = settings[:default_error_status] unless status
+      throw :error, message: message, status: status, headers: headers
     end
 
     # Redirect to a new url.
@@ -241,7 +261,7 @@ module Grape
     # @param options [Hash] The options used when redirect.
     #                       :permanent, default true.
     def redirect(url, options = {})
-      merged_options = {:permanent => false }.merge(options)
+      merged_options = { permanent: false }.merge(options)
       if merged_options[:permanent]
         status 301
       else
@@ -264,10 +284,10 @@ module Grape
       else
         return @status if @status
         case request.request_method.to_s.upcase
-          when 'POST'
-            201
-          else
-            200
+        when 'POST'
+          201
+        else
+          200
         end
       end
     end
@@ -282,11 +302,6 @@ module Grape
       end
     end
 
-    # Retrieves all available request headers.
-    def headers
-      @headers ||= @request.headers
-    end
-
     # Set response content-type
     def content_type(val)
       header('Content-Type', val)
@@ -297,7 +312,7 @@ module Grape
     # @example
     #   cookies[:mycookie] = 'mycookie val'
     #   cookies['mycookie-string'] = 'mycookie string val'
-    #   cookies[:more] = { :value => '123', :expires => Time.at(0) }
+    #   cookies[:more] = { value: '123', expires: Time.at(0) }
     #   cookies.delete :more
     #
     def cookies
@@ -334,8 +349,8 @@ module Grape
     #
     #   get '/users/:id' do
     #     present User.find(params[:id]),
-    #       :with => API::Entities::User,
-    #       :admin => current_user.admin?
+    #       with: API::Entities::User,
+    #       admin: current_user.admin?
     #   end
     def present(*args)
       options = args.count > 1 ? args.extract_options! : {}
@@ -346,27 +361,33 @@ module Grape
                     end
       entity_class = options.delete(:with)
 
-      # auto-detect the entity from the first object in the collection
-      object_instance = object.respond_to?(:first) ? object.first : object
+      if entity_class.nil?
+        # entity class not explicitely defined, auto-detect from relation#klass or first object in the collection
+        object_class = if object.respond_to?(:klass)
+                         object.klass
+                       else
+                         object.respond_to?(:first) ? object.first.class : object.class
+                       end
 
-      object_instance.class.ancestors.each do |potential|
-        entity_class ||= (settings[:representations] || {})[potential]
+        object_class.ancestors.each do |potential|
+          entity_class ||= (settings[:representations] || {})[potential]
+        end
+
+        entity_class ||= object_class.const_get(:Entity) if object_class.const_defined?(:Entity) && object_class.const_get(:Entity).respond_to?(:represent)
       end
-
-      entity_class ||= object_instance.class.const_get(:Entity) if object_instance.class.const_defined?(:Entity)
 
       root = options.delete(:root)
 
       representation = if entity_class
-        embeds = {:env => env}
-        embeds[:version] = env['api.version'] if env['api.version']
-        entity_class.represent(object, embeds.merge(options))
-      else
-        object
-      end
+                         embeds = { env: env }
+                         embeds[:version] = env['api.version'] if env['api.version']
+                         entity_class.represent(object, embeds.merge(options))
+                       else
+                         object
+                       end
 
       representation = { root => representation } if root
-      representation = (@body || {}).merge({key => representation}) if key
+      representation = (@body || {}).merge(key => representation) if key
       body representation
     end
 
@@ -382,8 +403,6 @@ module Grape
       env["rack.routing_args"][:route_info]
     end
 
-    protected
-
     # Return the collection of endpoints within this endpoint.
     # This is the case when an Grape::API mounts another Grape::API.
     def endpoints
@@ -394,19 +413,36 @@ module Grape
       end
     end
 
+    protected
+
     def run(env)
       @env = env
       @header = {}
-      @request = Grape::Request.new(@env)
 
-      self.extend helpers
+      @request = Grape::Request.new(env)
+      @params = @request.params
+      @headers = @request.headers
+
       cookies.read(@request)
+
+      self.class.before_each.call(self) if self.class.before_each
 
       run_filters befores
 
-      # Retieve validations from this namespace and all parent namespaces.
+      run_filters before_validations
+
+      # Retrieve validations from this namespace and all parent namespaces.
+      validation_errors = []
       settings.gather(:validations).each do |validator|
-        validator.validate!(params)
+        begin
+          validator.validate!(params)
+        rescue Grape::Exceptions::Validation => e
+          validation_errors << e
+        end
+      end
+
+      if validation_errors.any?
+        raise Grape::Exceptions::ValidationErrors, errors: validation_errors
       end
 
       run_filters after_validations
@@ -423,55 +459,71 @@ module Grape
 
       b.use Rack::Head
       b.use Grape::Middleware::Error,
-        :format => settings[:format],
-        :default_status => settings[:default_error_status] || 403,
-        :rescue_all => settings[:rescue_all],
-        :rescued_errors => aggregate_setting(:rescued_errors),
-        :default_error_formatter => settings[:default_error_formatter],
-        :error_formatters => settings[:error_formatters],
-        :rescue_options => settings[:rescue_options],
-        :rescue_handlers => merged_setting(:rescue_handlers)
+            format: settings[:format],
+            content_types: settings[:content_types],
+            default_status: settings[:default_error_status] || 500,
+            rescue_all: settings[:rescue_all],
+            default_error_formatter: settings[:default_error_formatter],
+            error_formatters: settings[:error_formatters],
+            rescue_options: settings[:rescue_options],
+            rescue_handlers: merged_setting(:rescue_handlers),
+            base_only_rescue_handlers: merged_setting(:base_only_rescue_handlers)
 
       aggregate_setting(:middleware).each do |m|
         m = m.dup
         block = m.pop if m.last.is_a?(Proc)
         if block
-          b.use *m, &block
+          b.use(*m, &block)
         else
-          b.use *m
+          b.use(*m)
         end
       end
 
-      b.use Rack::Auth::Basic, settings[:auth][:realm], &settings[:auth][:proc] if settings[:auth] && settings[:auth][:type] == :http_basic
-      b.use Rack::Auth::Digest::MD5, settings[:auth][:realm], settings[:auth][:opaque], &settings[:auth][:proc] if settings[:auth] && settings[:auth][:type] == :http_digest
+      if settings[:auth]
+        auth_proc         = settings[:auth][:proc]
+        auth_proc_context = self
+        auth_middleware   = {
+          http_basic:   { class: Rack::Auth::Basic,       args: [settings[:auth][:realm]] },
+          http_digest:  { class: Rack::Auth::Digest::MD5, args: [settings[:auth][:realm], settings[:auth][:opaque]] }
+        }[settings[:auth][:type]]
+
+        # evaluate auth proc in context of endpoint
+        if auth_middleware
+          b.use auth_middleware[:class], *auth_middleware[:args] do |*args|
+            auth_proc_context.instance_exec(*args, &auth_proc)
+          end
+        end
+      end
 
       if settings[:version]
-        b.use Grape::Middleware::Versioner.using(settings[:version_options][:using]), {
-          :versions        => settings[:version],
-          :version_options => settings[:version_options],
-          :prefix          => settings[:root_prefix]
-        }
+        b.use Grape::Middleware::Versioner.using(settings[:version_options][:using]),
+              versions: settings[:version] ? settings[:version].flatten : nil,
+              version_options: settings[:version_options],
+              prefix: settings[:root_prefix]
+
       end
 
       b.use Grape::Middleware::Formatter,
-        :format => settings[:format],
-        :default_format => settings[:default_format] || :txt,
-        :content_types => settings[:content_types],
-        :formatters => settings[:formatters],
-        :parsers => settings[:parsers]
+            format: settings[:format],
+            default_format: settings[:default_format] || :txt,
+            content_types: settings[:content_types],
+            formatters: settings[:formatters],
+            parsers: settings[:parsers]
 
       b
     end
 
     def helpers
       m = Module.new
-      settings.stack.each{|frame| m.send :include, frame[:helpers] if frame[:helpers]}
+      settings.stack.each do |frame|
+        m.send :include, frame[:helpers] if frame[:helpers]
+      end
       m
     end
 
     def aggregate_setting(key)
       settings.stack.inject([]) do |aggregate, frame|
-        aggregate += (frame[key] || [])
+        aggregate + (frame[key] || [])
       end
     end
 
@@ -483,12 +535,24 @@ module Grape
 
     def run_filters(filters)
       (filters || []).each do |filter|
-        instance_eval &filter
+        instance_eval(&filter)
       end
     end
 
-    def befores; aggregate_setting(:befores) end
-    def after_validations; aggregate_setting(:after_validations) end
-    def afters; aggregate_setting(:afters) end
+    def befores
+      aggregate_setting(:befores)
+    end
+
+    def before_validations
+      aggregate_setting(:before_validations)
+    end
+
+    def after_validations
+      aggregate_setting(:after_validations)
+    end
+
+    def afters
+      aggregate_setting(:afters)
+    end
   end
 end

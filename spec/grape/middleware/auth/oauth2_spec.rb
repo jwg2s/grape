@@ -2,89 +2,134 @@ require 'spec_helper'
 
 describe Grape::Middleware::Auth::OAuth2 do
   class FakeToken
+    attr_accessor :token
+
     def self.verify(token)
-      FakeToken.new(token) if %w(g e).include?(token[0..0])
+      FakeToken.new(token) if !!token && %w(g e).include?(token[0..0])
     end
-    
+
     def initialize(token)
-      self.token = token
+      @token = token
     end
-    
+
     def expired?
-      self.token[0..0] == 'e'
+      @token[0..0] == 'e'
     end
-    
+
     def permission_for?(env)
       env['PATH_INFO'] == '/forbidden' ? false : true
     end
-    
-    attr_accessor :token
   end
 
   def app
     Rack::Builder.app do
-      use Grape::Middleware::Auth::OAuth2, :token_class => 'FakeToken'
-      run lambda{|env| [200, {}, [ (env['api.token'].token rescue '') ]]}
+      use Grape::Middleware::Auth::OAuth2, token_class: 'FakeToken'
+      run lambda { |env| [200, {}, [(env['api.token'].token if env['api.token'])]] }
     end
   end
-  
+
   context 'with the token in the query string' do
     context 'and a valid token' do
-      before { get '/awesome?oauth_token=g123' }
-      
+      before { get '/awesome?access_token=g123' }
+
       it 'sets env["api.token"]' do
-        last_response.body.should == 'g123'
+        expect(last_response.body).to eq('g123')
       end
     end
-    
+
     context 'and an invalid token' do
       before do
         @err = catch :error do
-          get '/awesome?oauth_token=b123'
+          get '/awesome?access_token=b123'
         end
       end
-      
+
       it 'throws an error' do
-        @err[:status].should == 401
+        expect(@err[:status]).to eq(401)
       end
-      
+
       it 'sets the WWW-Authenticate header in the response' do
-        @err[:headers]['WWW-Authenticate'].should == "OAuth realm='OAuth API', error='invalid_token'"
+        expect(@err[:headers]['WWW-Authenticate']).to eq("OAuth realm='OAuth API', error='invalid_grant'")
       end
     end
   end
-  
+
   context 'with an expired token' do
     before do
       @err = catch :error do
-        get '/awesome?oauth_token=e123'
+        get '/awesome?access_token=e123'
       end
     end
-    
-    it { @err[:status].should == 401 }
-    it { @err[:headers]['WWW-Authenticate'].should == "OAuth realm='OAuth API', error='expired_token'" }
-  end
-  
-  %w(HTTP_AUTHORIZATION X_HTTP_AUTHORIZATION X-HTTP_AUTHORIZATION REDIRECT_X_HTTP_AUTHORIZATION).each do |head|  
-    context 'with the token in the #{head} header' do
-      before { get '/awesome', {}, head => 'OAuth g123' }
-      it { last_response.body.should == 'g123' }
+
+    it 'throws an error' do
+      expect(@err[:status]).to eq(401)
+    end
+
+    it 'sets the WWW-Authenticate header in the response to error' do
+      expect(@err[:headers]['WWW-Authenticate']).to eq("OAuth realm='OAuth API', error='invalid_grant'")
     end
   end
-  
-  context 'with the token in the POST body' do
-    before { post '/awesome', {'oauth_token' => 'g123'} }
-    it { last_response.body.should == 'g123'}
+
+  %w(HTTP_AUTHORIZATION X_HTTP_AUTHORIZATION X-HTTP_AUTHORIZATION REDIRECT_X_HTTP_AUTHORIZATION).each do |head|
+    context "with the token in the #{head} header" do
+      before do
+        get '/awesome', {}, head => 'OAuth g123'
+      end
+
+      it 'sets env["api.token"]' do
+        expect(last_response.body).to eq('g123')
+      end
+    end
   end
-  
+
+  context 'with the token in the POST body' do
+    before do
+      post '/awesome', 'access_token' => 'g123'
+    end
+
+    it 'sets env["api.token"]' do
+      expect(last_response.body).to eq('g123')
+    end
+  end
+
   context 'when accessing something outside its scope' do
     before do
       @err = catch :error do
-        get '/forbidden?oauth_token=g123'
+        get '/forbidden?access_token=g123'
       end
     end
-    
-    it { @err[:headers]['WWW-Authenticate'].should == "OAuth realm='OAuth API', error='insufficient_scope'" }
-    it { @err[:status].should == 403 }
+
+    it 'throws an error' do
+      expect(@err[:status]).to eq(403)
+    end
+
+    it 'sets the WWW-Authenticate header in the response to error' do
+      expect(@err[:headers]['WWW-Authenticate']).to eq("OAuth realm='OAuth API', error='insufficient_scope'")
+    end
+  end
+
+  context 'when authorization is not required' do
+    def app
+      Rack::Builder.app do
+        use Grape::Middleware::Auth::OAuth2, token_class: 'FakeToken', required: false
+        run lambda { |env| [200, {}, [(env['api.token'].token if env['api.token'])]] }
+      end
+    end
+
+    context 'with no token' do
+      before { post '/awesome' }
+
+      it 'succeeds anyway' do
+        expect(last_response.status).to eq(200)
+      end
+    end
+
+    context 'with a valid token' do
+      before { get '/awesome?access_token=g123' }
+
+      it 'sets env["api.token"]' do
+        expect(last_response.body).to eq('g123')
+      end
+    end
   end
 end

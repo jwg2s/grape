@@ -15,7 +15,12 @@ RSpec::Core::RakeTask.new(:rcov) do |spec|
 end
 
 task :spec
-task :default => :spec
+
+require 'rainbow/ext/string' unless String.respond_to?(:color)
+require 'rubocop/rake_task'
+Rubocop::RakeTask.new(:rubocop)
+
+task default: [:rubocop, :spec]
 
 begin
   require 'yard'
